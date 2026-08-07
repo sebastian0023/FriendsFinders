@@ -1,6 +1,16 @@
 terraform {
   required_version = ">= 1.0"
 
+  # Remote state — required so CI (ephemeral runners) shares one state file.
+  # The bucket + lock table are created once by scripts/bootstrap-tf-backend.sh.
+  backend "s3" {
+    bucket         = "friendsfinders-tfstate-sebastian0023"
+    key            = "friendsfinders/terraform.tfstate"
+    region         = "us-east-1"
+    dynamodb_table = "friendsfinders-tf-lock"
+    encrypt        = true
+  }
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
