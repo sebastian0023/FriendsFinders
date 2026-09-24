@@ -4,8 +4,10 @@ from diagrams.aws.database import Dynamodb
 from diagrams.aws.network import APIGateway, CloudFront
 from diagrams.aws.storage import S3
 from diagrams.aws.management import SystemsManagerParameterStore, Cloudwatch
-from diagrams.aws.security import Cognito
+from diagrams.aws.security import Cognito, IAMRole
 from diagrams.aws.general import Client
+from diagrams.onprem.ci import GithubActions
+from diagrams.onprem.iac import Terraform
 
 # ── Cost Breakdown ──────────────────────────────────────────────────
 COST_LABEL = (
@@ -144,6 +146,38 @@ with Diagram(
         "Per-Lambda Alarms"
     )
 
+    # ── CI/CD Pipeline ──────────────────────────────────────────────
+    with Cluster("CI/CD — deploy on push to main"):
+        gha = GithubActions(
+            "GitHub Actions\n"
+            "push → main\n"
+            "build Lambda zips"
+        )
+        deploy_role = IAMRole(
+            "IAM Role\n"
+            "github-actions-deploy\n"
+            "assumed via OIDC\n"
+            "(no static keys)"
+        )
+        tf = Terraform(
+            "Terraform\n"
+            "init + apply"
+        )
+        tf_state = S3(
+            "S3\n"
+            "remote state bucket\n"
+            "versioned + encrypted"
+        )
+        tf_lock = Dynamodb(
+            "DynamoDB\n"
+            "state lock table"
+        )
+
+        gha >> Edge(label="assume role", style="dashed", color="darkorange") >> deploy_role
+        gha >> Edge(color="black") >> tf
+        tf  >> Edge(label="state", style="dashed", color="royalblue") >> tf_state
+        tf  >> Edge(label="lock", style="dashed", color="royalblue") >> tf_lock
+
     # ════════════════════════════════════════════════════════════════
     # EDGES
     # ════════════════════════════════════════════════════════════════
@@ -208,3 +242,8 @@ with Diagram(
     lam_ws     >> Edge(style="dotted", color="gray") >> cw
     lam_rest   >> Edge(style="dotted", color="gray") >> cw
     lam_fanout >> Edge(style="dotted", color="gray") >> cw
+
+    # CI/CD → provisions / updates the whole stack
+    tf >> Edge(
+        label="terraform apply\nprovisions all resources", style="dotted", color="darkgreen"
+    ) >> lam_rest

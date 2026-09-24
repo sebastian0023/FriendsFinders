@@ -588,6 +588,64 @@
     #section-profile #profile-status {
       margin-top: 12px;
     }
+
+    /* ── Map tab (abstract radar) ─────────────────────────────── */
+    .map-card { padding: 14px; }
+    .map-stage {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--sunken);
+      border: 1px solid var(--hairline);
+    }
+    #map-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      cursor: pointer;
+      touch-action: manipulation;
+    }
+    #btn-refresh-map {
+      position: absolute;
+      top: 12px;
+      right: 12px;
+      z-index: 3;
+      box-shadow: var(--shadow-card);
+    }
+    .map-popup {
+      position: absolute;
+      z-index: 4;
+      min-width: 150px;
+      max-width: 220px;
+      background: var(--surface);
+      border: 1px solid var(--hairline);
+      border-radius: 10px;
+      padding: 10px 12px;
+      box-shadow: var(--shadow-elevated);
+      pointer-events: none;
+    }
+    .map-popup .mp-name {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ink-1);
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .map-popup .mp-dist {
+      color: var(--accent);
+      font-variant-numeric: tabular-nums;
+    }
+    .map-popup .mp-sub {
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px solid var(--hairline);
+      font-size: 11.5px;
+      color: var(--ink-3);
+    }
+    #map-status { margin-top: 12px; }
   </style>
 </head>
 <body>
@@ -700,6 +758,20 @@
       </div>
     </section>
 
+    <!-- TAB: MAP -->
+    <section class="tab-view hidden" id="tab-map">
+      <header class="tab-header"><h1>Map</h1></header>
+
+      <div class="card map-card">
+        <div class="map-stage">
+          <canvas id="map-canvas"></canvas>
+          <button id="btn-refresh-map" class="secondary btn-small">Refresh</button>
+          <div id="map-popup" class="map-popup hidden"></div>
+        </div>
+        <p class="status" id="map-status">Set your location on the Friends tab to see the map.</p>
+      </div>
+    </section>
+
   </div>
 </div>
 
@@ -735,6 +807,17 @@
         <circle cx="12" cy="7" r="4"/>
       </svg>
       <span>Profile</span>
+    </button>
+    <button type="button" class="tab-btn" data-tab="map" aria-label="Map">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <circle cx="12" cy="12" r="9"/>
+        <circle cx="12" cy="12" r="3.2"/>
+        <line x1="12" y1="1.5" x2="12" y2="4.5"/>
+        <line x1="12" y1="19.5" x2="12" y2="22.5"/>
+        <line x1="1.5" y1="12" x2="4.5" y2="12"/>
+        <line x1="19.5" y1="12" x2="22.5" y2="12"/>
+      </svg>
+      <span>Map</span>
     </button>
   </div>
 </nav>
@@ -887,6 +970,16 @@ function haversineMiles(lat1, lng1, lat2, lng2) {
   return EARTH_RADIUS_MI * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)));
 }
 
+// Initial great-circle bearing from point 1 to point 2 (0° = North, clockwise).
+function bearingDegrees(lat1, lng1, lat2, lng2) {
+  const p1 = toRadians(lat1);
+  const p2 = toRadians(lat2);
+  const dLng = toRadians(lng2 - lng1);
+  const y = Math.sin(dLng) * Math.cos(p2);
+  const x = Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dLng);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
 function readUserLngLatInput() {
   const lat = parseFloat(document.getElementById('input-lat').value);
   const lng = parseFloat(document.getElementById('input-lng').value);
@@ -918,6 +1011,162 @@ function renderFriends() {
       <span class="trailing"><span class="distance">${displayFriendDistanceMiles(f).toFixed(2)} mi</span></span>
     </div>`;
   }).join('');
+}
+
+// ── Map tab: abstract radar render (100% client-side, no tiles) ───────────────
+let mapHits = []; // [{ friendId, x, y, r, dist, lastUpdated }] in CSS pixels
+
+// Pick a "nice" outer-ring distance at least as large as the farthest friend.
+function niceRingMiles(maxMiles) {
+  const steps = [0.1, 0.25, 0.5, 1, 2, 3, 5, 10, 25, 50, 100];
+  for (const s of steps) if (s >= maxMiles) return s;
+  return Math.ceil(maxMiles);
+}
+
+function renderMap() {
+  const canvas = document.getElementById('map-canvas');
+  if (!canvas) return;
+  const stage = canvas.parentElement;
+  const cssW = stage.clientWidth;
+  const cssH = stage.clientHeight;
+  if (cssW === 0 || cssH === 0) return; // tab hidden — nothing to draw
+
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.round(cssW * dpr);
+  canvas.height = Math.round(cssH * dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cssW, cssH);
+
+  mapHits = [];
+  hide('map-popup');
+
+  const cx = cssW / 2;
+  const cy = cssH / 2;
+  const maxRadius = Math.min(cssW, cssH) / 2 - 30;
+  const RING_COUNT = 4;
+
+  const user = readUserLngLatInput();
+  if (!user) {
+    setStatus('map-status', 'Set your location on the Friends tab to see the map.');
+    return;
+  }
+
+  // Friends with live coordinates → distance + bearing from the user.
+  const placed = [];
+  let offlineCount = 0;
+  Object.values(nearbyFriends).forEach((f) => {
+    if (f.latitude == null || f.longitude == null) { offlineCount++; return; }
+    placed.push({
+      friendId: f.friendId,
+      dist: haversineMiles(user.lat, user.lng, f.latitude, f.longitude),
+      brng: bearingDegrees(user.lat, user.lng, f.latitude, f.longitude),
+      lastUpdated: f.lastUpdated,
+    });
+  });
+
+  const maxDist = placed.reduce((m, p) => Math.max(m, p.dist), 0);
+  const ringMax = niceRingMiles(maxDist > 0 ? maxDist : 0.5);
+
+  // Range rings.
+  ctx.strokeStyle = '#d6d2c6';
+  ctx.lineWidth = 1;
+  for (let i = 1; i <= RING_COUNT; i++) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, (maxRadius * i) / RING_COUNT, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.fillStyle = '#8a8f93';
+  ctx.font = '10px Inter, sans-serif';
+  ctx.fillText(ringMax + ' mi', cx + 5, cy - maxRadius - 7);
+
+  // Accent disc + the user dot at the center.
+  ctx.fillStyle = 'rgba(15, 76, 74, 0.10)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, maxRadius / RING_COUNT, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#0f4c4a';
+  ctx.beginPath();
+  ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 3.5, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Friend markers, placed by bearing (clockwise from North) and scaled distance.
+  placed.forEach((p) => {
+    const r = (ringMax > 0 ? Math.min(p.dist / ringMax, 1) : 0) * maxRadius;
+    const theta = p.brng * Math.PI / 180;
+    const x = cx + r * Math.sin(theta);
+    const y = cy - r * Math.cos(theta);
+    const markerR = 16;
+
+    ctx.strokeStyle = 'rgba(15, 76, 74, 0.25)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([3, 3]);
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.strokeStyle = '#0f4c4a';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(x, y, markerR, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    const name = friendNames[p.friendId] || p.friendId;
+    ctx.fillStyle = '#0f4c4a';
+    ctx.font = '600 13px Inter, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText((String(name)[0] || '?').toUpperCase(), x, y);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+
+    ctx.fillStyle = '#2f9e6a';
+    ctx.beginPath();
+    ctx.arc(x + markerR - 3, y + markerR - 5, 4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    mapHits.push({ friendId: p.friendId, x, y, r: markerR + 4, dist: p.dist, lastUpdated: p.lastUpdated });
+  });
+
+  let summary = placed.length
+    ? `${placed.length} friend${placed.length === 1 ? '' : 's'} sharing · scale ${ringMax} mi`
+    : 'No friends sharing live location yet.';
+  if (offlineCount) summary += ` · ${offlineCount} offline`;
+  setStatus('map-status', summary);
+}
+
+function showMapPopup(hit) {
+  const popup = document.getElementById('map-popup');
+  const name = friendNames[hit.friendId] || hit.friendId;
+  const updated = hit.lastUpdated ? new Date(hit.lastUpdated).toLocaleTimeString() : '—';
+  popup.innerHTML =
+    `<div class="mp-name"><span>${escapeHtml(name)}</span>` +
+    `<span class="mp-dist">${hit.dist.toFixed(2)} mi</span></div>` +
+    `<div class="mp-sub">Updated ${escapeHtml(updated)}</div>`;
+  popup.classList.remove('hidden');
+
+  const stage = popup.parentElement;
+  const pw = popup.offsetWidth || 180;
+  const ph = popup.offsetHeight || 60;
+  let left = hit.x + 16;
+  let top = hit.y - ph - 8;
+  if (left + pw > stage.clientWidth) left = hit.x - pw - 16;
+  if (left < 4) left = 4;
+  if (top < 4) top = hit.y + 16;
+  popup.style.left = left + 'px';
+  popup.style.top = top + 'px';
 }
 
 // ── Load friend names from REST API ──────────────────────────────────────────
@@ -997,9 +1246,11 @@ function connectWs() {
       });
       nearbyFriends = merged;
       renderFriends();
+      renderMap();
     } else if (msg.type === 'location.push') {
       nearbyFriends[msg.friendId] = msg;
       renderFriends();
+      renderMap();
     }
   };
 }
@@ -1056,6 +1307,7 @@ function activateTab(name) {
     b.classList.toggle('active', b.dataset.tab === name);
   });
   window.scrollTo({ top: 0, behavior: 'instant' });
+  if (name === 'map') renderMap();
 }
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => activateTab(btn.dataset.tab));
@@ -1120,6 +1372,33 @@ document.getElementById('btn-refresh-friends').onclick = () => {
   ws.send(JSON.stringify({ action: 'friends.refresh' }));
   log('→ friends.refresh');
 };
+
+// ── Map tab interactions ──────────────────────────────────────────────────────
+document.getElementById('btn-refresh-map').onclick = () => {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ action: 'friends.refresh' }));
+    log('→ friends.refresh');
+  }
+  renderMap();
+};
+
+document.getElementById('map-canvas').addEventListener('click', (e) => {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const px = e.clientX - rect.left;
+  const py = e.clientY - rect.top;
+  let found = null, bestD = Infinity;
+  for (const h of mapHits) {
+    const d = Math.hypot(px - h.x, py - h.y);
+    if (d <= h.r && d < bestD) { found = h; bestD = d; }
+  }
+  if (found) showMapPopup(found);
+  else hide('map-popup');
+});
+
+window.addEventListener('resize', () => {
+  const mapTab = document.getElementById('tab-map');
+  if (mapTab && !mapTab.classList.contains('hidden')) renderMap();
+});
 
 document.getElementById('btn-refresh-strangers').onclick = async () => {
   try {
