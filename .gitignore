@@ -23,9 +23,11 @@ terraform/*.tfplan
 .DS_Store
 Thumbs.db
 
-# IDE
+# IDE & Agents
 .vscode/
 .idea/
+.agents/
+
 
 # Python
 venv/
