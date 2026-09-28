@@ -93,15 +93,15 @@ locals {
 module "iam" {
   source = "./modules/iam"
 
-  project_name                = var.project_name
-  users_table_arn             = module.dynamodb.users_table_arn
-  connections_table_arn       = module.dynamodb.connections_table_arn
+  project_name                 = var.project_name
+  users_table_arn              = module.dynamodb.users_table_arn
+  connections_table_arn        = module.dynamodb.connections_table_arn
   connections_table_stream_arn = module.dynamodb.connections_table_stream_arn
-  friend_requests_table_arn   = module.dynamodb.friend_requests_table_arn
-  s3_bucket_arn               = module.s3.bucket_arn
-  ssm_parameter_arns          = module.ssm.parameter_arns
-  websocket_api_arn           = local.websocket_api_arn
-  tags                        = var.tags
+  friend_requests_table_arn    = module.dynamodb.friend_requests_table_arn
+  s3_bucket_arn                = module.s3.bucket_arn
+  ssm_parameter_arns           = module.ssm.parameter_arns
+  websocket_api_arn            = local.websocket_api_arn
+  tags                         = var.tags
 }
 
 # --- Lambda Functions ---
@@ -109,18 +109,18 @@ module "iam" {
 module "lambda" {
   source = "./modules/lambda"
 
-  project_name                = var.project_name
-  websocket_handler_role_arn  = module.iam.websocket_handler_role_arn
-  rest_handler_role_arn       = module.iam.rest_handler_role_arn
-  fanout_handler_role_arn     = module.iam.fanout_handler_role_arn
-  users_table_name            = module.dynamodb.users_table_name
-  connections_table_name      = module.dynamodb.connections_table_name
-  friend_requests_table_name  = module.dynamodb.friend_requests_table_name
+  project_name                 = var.project_name
+  websocket_handler_role_arn   = module.iam.websocket_handler_role_arn
+  rest_handler_role_arn        = module.iam.rest_handler_role_arn
+  fanout_handler_role_arn      = module.iam.fanout_handler_role_arn
+  users_table_name             = module.dynamodb.users_table_name
+  connections_table_name       = module.dynamodb.connections_table_name
+  friend_requests_table_name   = module.dynamodb.friend_requests_table_name
   connections_table_stream_arn = module.dynamodb.connections_table_stream_arn
-  s3_bucket_name              = module.s3.bucket_name
-  websocket_api_endpoint      = local.websocket_api_endpoint
-  cognito_user_pool_id        = module.cognito.user_pool_id
-  tags                        = var.tags
+  s3_bucket_name               = module.s3.bucket_name
+  websocket_api_endpoint       = local.websocket_api_endpoint
+  cognito_user_pool_id         = module.cognito.user_pool_id
+  tags                         = var.tags
 }
 
 # --- API Gateway Routes & Integrations ---
