@@ -3,9 +3,11 @@ import type { Config } from 'jest';
 const config: Config = {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  roots: ['<rootDir>/tests'],
-  testMatch: ['**/*.test.ts'],
+  // src must be a root too, otherwise untested source files are left out of coverage reports.
+  roots: ['<rootDir>/src', '<rootDir>/tests'],
+  testMatch: ['<rootDir>/tests/**/*.test.ts'],
   collectCoverageFrom: ['src/**/*.ts'],
+  clearMocks: true,
 };
 
 export default config;
