@@ -46,7 +46,8 @@ jobs:
           terraform_version: 1.9.8
 
       - name: Terraform Init
-        run: terraform init
+        # CI deploys to the repo owner's account; local devs use terraform/backend.hcl.
+        run: terraform init -backend-config="bucket=friendsfinders-tfstate-sebastian0023"
         working-directory: terraform
 
       - name: Terraform Apply

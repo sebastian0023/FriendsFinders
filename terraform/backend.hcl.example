@@ -1,0 +1,6 @@
+# Copy to backend.hcl (gitignored) and set your own state bucket:
+#   cp backend.hcl.example backend.hcl
+#   terraform init -backend-config=backend.hcl
+#
+# S3 bucket names are globally unique, so each AWS account uses its own.
+bucket = "friendsfinders-tfstate-CHANGE-ME"

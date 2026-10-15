@@ -4,11 +4,19 @@
 # remote state. Run this ONCE, locally, before `terraform init -migrate-state`.
 #
 # Requires: AWS CLI configured with credentials for the target account.
-# These names must match the backend block in terraform/main.tf.
+# The bucket name comes from $TF_STATE_BUCKET, or else from terraform/backend.hcl.
 # ──────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-BUCKET="friendsfinders-tfstate-sebastian0023"
+BACKEND_HCL="$(dirname "$0")/../terraform/backend.hcl"
+BUCKET="${TF_STATE_BUCKET:-}"
+if [ -z "$BUCKET" ] && [ -f "$BACKEND_HCL" ]; then
+  BUCKET="$(sed -n 's/^[[:space:]]*bucket[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$BACKEND_HCL")"
+fi
+if [ -z "$BUCKET" ]; then
+  echo "Set TF_STATE_BUCKET or create terraform/backend.hcl (see backend.hcl.example)." >&2
+  exit 1
+fi
 TABLE="friendsfinders-tf-lock"
 REGION="us-east-1"
 
@@ -59,4 +67,4 @@ fi
 
 echo
 echo "✅ Remote state backend ready."
-echo "   Next: cd terraform && terraform init -migrate-state"
+echo "   Next: cd terraform && terraform init -backend-config=backend.hcl"
