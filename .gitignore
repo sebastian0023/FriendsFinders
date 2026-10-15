@@ -13,6 +13,8 @@ terraform/.terraform/
 *.tfstate
 *.tfstate.*
 *.tfplan
+# Per-developer backend settings (copy backend.hcl.example)
+terraform/backend.hcl
 # .terraform.lock.hcl is intentionally committed to pin provider versions
 
 # Environment
