@@ -10,10 +10,10 @@ build/
 
 # Terraform
 terraform/.terraform/
-terraform/*.tfstate
-terraform/*.tfstate.backup
-terraform/*.tfplan
-.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfplan
+# .terraform.lock.hcl is intentionally committed to pin provider versions
 
 # Environment
 .env
@@ -27,6 +27,7 @@ Thumbs.db
 .vscode/
 .idea/
 .agents/
+.claude/
 
 
 # Python
