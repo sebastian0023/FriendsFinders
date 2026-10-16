@@ -489,15 +489,37 @@ describe('websocket-handler: location.update', () => {
     expect(mockUpdateLocation).not.toHaveBeenCalled();
   });
 
-  // Documents a known gap: the body is parsed with JSON.parse outside any try/catch, so a
-  // malformed payload throws and the client gets an API Gateway 500 instead of the
-  // { type: 'error' } message that other invalid input receives. Update when this is fixed.
-  it('currently throws on a malformed JSON body', async () => {
-    await expect(
-      handler(wsEvent('location.update', { body: '{not json' }))
-    ).rejects.toThrow(SyntaxError);
-    expect(mockUpdateLocation).not.toHaveBeenCalled();
+  describe('with a malformed JSON body', () => {
+    const malformed = () => handler(wsEvent('location.update', { body: '{not json' }));
+
+    it('messages the client and writes nothing, like any other invalid input', async () => {
+      const result = await malformed();
+
+      expect(result).toEqual({ statusCode: 200, body: 'Invalid' });
+      expect(mockPost).toHaveBeenCalledWith('conn-1', { type: 'error', message: 'Invalid JSON' });
+      expect(mockGetConnection).not.toHaveBeenCalled();
+      expect(mockUpdateLocation).not.toHaveBeenCalled();
+    });
+
+    it('still returns 200 when the error message cannot be delivered', async () => {
+      mockPost.mockRejectedValue(new Error('GoneException'));
+
+      const result = await malformed();
+
+      expect(result).toEqual({ statusCode: 200, body: 'Invalid' });
+      expect(errorSpy).toHaveBeenCalledWith('Failed to send error message:', expect.any(Error));
+    });
   });
+
+  it.each(['42', '"text"', 'true', '[]'])(
+    'rejects a JSON body that is not an object (%s) as an invalid message',
+    async (body) => {
+      const result = await handler(wsEvent('location.update', { body }));
+
+      expect(result).toEqual({ statusCode: 200, body: 'Invalid' });
+      expect(mockUpdateLocation).not.toHaveBeenCalled();
+    }
+  );
 });
 
 // ── friends.refresh ───────────────────────────────────────────────────────────

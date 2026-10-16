@@ -152,17 +152,29 @@ async function handleFriendsRefresh(connectionId: string): Promise<APIGatewayPro
   return { statusCode: 200, body: 'OK' };
 }
 
+/** Tells the client why its location update was rejected; always acknowledges with 200. */
+async function rejectLocationUpdate(connectionId: string, message: string | undefined): Promise<APIGatewayProxyResult> {
+  try {
+    await postToConnection(connectionId, { type: 'error', message });
+  } catch (err) {
+    console.error('Failed to send error message:', err);
+  }
+  return { statusCode: 200, body: 'Invalid' };
+}
+
 async function handleLocationUpdate(event: APIGatewayProxyEvent, connectionId: string): Promise<APIGatewayProxyResult> {
-  const body = event.body ? JSON.parse(event.body) : null;
+  let body: any = null;
+  if (event.body) {
+    try {
+      body = JSON.parse(event.body);
+    } catch {
+      return rejectLocationUpdate(connectionId, 'Invalid JSON');
+    }
+  }
 
   const validation = validateLocationUpdate(body);
   if (!validation.valid) {
-    try {
-      await postToConnection(connectionId, { type: 'error', message: validation.error });
-    } catch (err) {
-      console.error('Failed to send error message:', err);
-    }
-    return { statusCode: 200, body: 'Invalid' };
+    return rejectLocationUpdate(connectionId, validation.error);
   }
 
   // Look up connection to get userId
