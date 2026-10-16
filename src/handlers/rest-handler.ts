@@ -18,6 +18,7 @@ import {
 import { getConfig } from '../utils/config';
 import { haversine } from '../utils/distance';
 import { generateUploadUrl, generateDownloadUrl } from '../utils/s3-client';
+import { validateProfileUpdate } from '../utils/profile-validation';
 import { UserProfile, FriendRequest, NearbyStrangerEntry, NearbyFriendHttpEntry, ConnectionRecord } from '../types';
 
 export async function handler(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2> {
@@ -300,28 +301,34 @@ async function handleUpdateProfile(event: APIGatewayProxyEventV2): Promise<APIGa
     return response(403, { error: 'Forbidden' });
   }
 
-  const body = event.body ? JSON.parse(event.body) : {};
+  let body: unknown = {};
+  if (event.body) {
+    try {
+      body = JSON.parse(event.body);
+    } catch {
+      return response(400, { error: 'Invalid JSON' });
+    }
+  }
+
+  const validation = validateProfileUpdate(body, userId);
+  if (!validation.valid) return response(400, { error: validation.error });
+  const fields = validation.fields;
 
   // Check if user exists; if not, create
   const existingUser = await getUser(userId);
   if (!existingUser) {
     const newProfile: UserProfile = {
       userId,
-      displayName: body.displayName || 'User',
-      profilePictureKey: body.profilePictureKey,
-      discoverable: body.discoverable ?? false,
+      displayName: fields.displayName ?? 'User',
+      profilePictureKey: fields.profilePictureKey,
+      discoverable: fields.discoverable ?? false,
       createdAt: new Date().toISOString(),
     };
     await putUser(newProfile);
     return response(200, { message: 'Profile created' });
   }
 
-  const updates: Partial<Pick<UserProfile, 'displayName' | 'profilePictureKey' | 'discoverable'>> = {};
-  if (body.displayName !== undefined) updates.displayName = body.displayName;
-  if (body.profilePictureKey !== undefined) updates.profilePictureKey = body.profilePictureKey;
-  if (body.discoverable !== undefined) updates.discoverable = body.discoverable;
-
-  await updateUser(userId, updates);
+  await updateUser(userId, fields);
   return response(200, { message: 'Profile updated' });
 }
 
