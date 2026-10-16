@@ -102,14 +102,6 @@ resource "aws_apigatewayv2_route" "get_friends" {
   authorizer_id      = local.jwt_auth.authorizer_id
 }
 
-resource "aws_apigatewayv2_route" "post_friends" {
-  api_id             = aws_apigatewayv2_api.http.id
-  route_key          = "POST /friends/{friendId}"
-  target             = "integrations/${aws_apigatewayv2_integration.http.id}"
-  authorization_type = local.jwt_auth.authorization_type
-  authorizer_id      = local.jwt_auth.authorizer_id
-}
-
 resource "aws_apigatewayv2_route" "delete_friends" {
   api_id             = aws_apigatewayv2_api.http.id
   route_key          = "DELETE /friends/{friendId}"
