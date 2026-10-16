@@ -423,16 +423,26 @@ async function handleNearbyStrangers(event: APIGatewayProxyEventV2): Promise<API
   const friends = await getFriends(userId);
   const friendIds = new Set(friends.map(f => f.friendId));
 
-  // Filter: exclude self, exclude friends, compute distance
-  const candidates: { userId: string; distanceMiles: number }[] = [];
+  // Exclude self and friends. A user may have several live connections (phone, laptop), so
+  // keep only the nearest one per user: each stranger is listed once, at their closest distance.
+  const nearestByUser = new Map<string, number>();
   for (const conn of allConnections) {
     if (conn.userId === userId) continue;
     if (friendIds.has(conn.userId)) continue;
     if (conn.latitude === undefined || conn.longitude === undefined) continue;
 
     const distance = haversine(userLat, userLng, conn.latitude, conn.longitude);
+    const current = nearestByUser.get(conn.userId);
+    if (current === undefined || distance < current) {
+      nearestByUser.set(conn.userId, distance);
+    }
+  }
+
+  // Keep those within the search radius
+  const candidates: { userId: string; distanceMiles: number }[] = [];
+  for (const [strangerId, distance] of nearestByUser) {
     if (distance <= config.searchRadiusMiles) {
-      candidates.push({ userId: conn.userId, distanceMiles: distance });
+      candidates.push({ userId: strangerId, distanceMiles: distance });
     }
   }
 
