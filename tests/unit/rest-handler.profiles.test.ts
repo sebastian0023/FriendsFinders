@@ -45,6 +45,9 @@ const CONFIG = {
   nearbyStrangersLimit: 50,
 };
 
+// The key format produced by the upload-URL endpoint, for the default caller (user-1).
+const OWN_KEY = 'profile-pictures/user-1/0b9c5a52-7d2f-4a43-9b53-1f6d6a1e2c11.jpg';
+
 function user(overrides: Partial<UserProfile> = {}): UserProfile {
   return {
     userId: 'user-2',
@@ -161,7 +164,7 @@ describe('rest-handler: PUT /users/{userId}/profile', () => {
   describe('when the profile does not exist yet', () => {
     it('creates it from the body', async () => {
       const result = await put({
-        body: { displayName: 'Ana', profilePictureKey: 'pics/ana.jpg', discoverable: true },
+        body: { displayName: 'Ana', profilePictureKey: OWN_KEY, discoverable: true },
       });
 
       expect(resultStatus(result)).toBe(200);
@@ -169,7 +172,7 @@ describe('rest-handler: PUT /users/{userId}/profile', () => {
       expect(mockPutUser).toHaveBeenCalledWith({
         userId: 'user-1',
         displayName: 'Ana',
-        profilePictureKey: 'pics/ana.jpg',
+        profilePictureKey: OWN_KEY,
         discoverable: true,
         createdAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T.*Z$/),
       });
@@ -193,9 +196,17 @@ describe('rest-handler: PUT /users/{userId}/profile', () => {
       );
     });
 
-    it('treats an empty display name as missing', async () => {
-      await put({ body: { displayName: '' } });
-      expect(mockPutUser).toHaveBeenCalledWith(expect.objectContaining({ displayName: 'User' }));
+    it('rejects an empty display name instead of silently using "User"', async () => {
+      const result = await put({ body: { displayName: '' } });
+
+      expect(resultStatus(result)).toBe(400);
+      expect(resultJson(result)).toEqual({ error: 'displayName must be between 1 and 50 characters' });
+      expect(mockPutUser).not.toHaveBeenCalled();
+    });
+
+    it('stores the display name trimmed', async () => {
+      await put({ body: { displayName: '  Ana  ' } });
+      expect(mockPutUser).toHaveBeenCalledWith(expect.objectContaining({ displayName: 'Ana' }));
     });
 
     it('keeps an explicit discoverable: false', async () => {
@@ -236,13 +247,18 @@ describe('rest-handler: PUT /users/{userId}/profile', () => {
     });
 
     it('updates all three editable fields together', async () => {
-      await put({ body: { displayName: 'N', profilePictureKey: 'pics/n.jpg', discoverable: true } });
+      await put({ body: { displayName: 'N', profilePictureKey: OWN_KEY, discoverable: true } });
 
       expect(mockUpdateUser).toHaveBeenCalledWith('user-1', {
         displayName: 'N',
-        profilePictureKey: 'pics/n.jpg',
+        profilePictureKey: OWN_KEY,
         discoverable: true,
       });
+    });
+
+    it('stores the display name trimmed', async () => {
+      await put({ body: { displayName: '  New Name  ' } });
+      expect(mockUpdateUser).toHaveBeenCalledWith('user-1', { displayName: 'New Name' });
     });
 
     it('applies discoverable: false (a falsy value is still a change)', async () => {
@@ -266,41 +282,67 @@ describe('rest-handler: PUT /users/{userId}/profile', () => {
       expect(mockUpdateUser).toHaveBeenCalledWith('user-1', {});
     });
 
-    // Documents current behaviour: field values are stored as given, with no validation of
-    // type, length or ownership. In particular profilePictureKey can point at any object key,
-    // and the app then signs a download URL for it when the profile is read.
+  });
+
+  // Invalid input is rejected whether or not the profile exists, and before any database access.
+  describe.each([
+    ['a new profile', undefined],
+    ['an existing profile', user({ userId: 'user-1' })],
+  ])('with invalid input for %s', (_case, existing) => {
+    beforeEach(() => {
+      mockGetUser.mockResolvedValue(existing);
+    });
+
     it.each([
-      ['an empty display name', { displayName: '' }],
-      ['a non-string display name', { displayName: 42 }],
-      ['a very long display name', { displayName: 'x'.repeat(10_000) }],
-      ['another user\'s picture key', { profilePictureKey: 'profile-pictures/user-2/their.jpg' }],
-      ['a non-boolean discoverable flag', { discoverable: 'yes' }],
-    ])('stores %s without validation', async (_name, body) => {
+      ['an empty display name', { displayName: '' }, 'displayName must be between 1 and 50 characters'],
+      ['a blank display name', { displayName: '   ' }, 'displayName must be between 1 and 50 characters'],
+      ['a non-string display name', { displayName: 42 }, 'displayName must be a string'],
+      ['a very long display name', { displayName: 'x'.repeat(10_000) }, 'displayName must be between 1 and 50 characters'],
+      ['a display name with control characters', { displayName: 'a\u0000b' }, 'displayName must not contain control characters'],
+      ['a string discoverable flag', { discoverable: 'false' }, 'discoverable must be true or false'],
+      ['a numeric discoverable flag', { discoverable: 0 }, 'discoverable must be true or false'],
+      ['another user\'s picture key', { profilePictureKey: 'profile-pictures/user-2/their.jpg' }, 'profilePictureKey must be an upload key for your own profile'],
+      ['an arbitrary bucket key', { profilePictureKey: 'private/report.pdf' }, 'profilePictureKey must be an upload key for your own profile'],
+      ['a non-string picture key', { profilePictureKey: 7 }, 'profilePictureKey must be a string'],
+    ])('rejects %s with 400 and writes nothing', async (_name, body, error) => {
       const result = await put({ body });
 
-      expect(resultStatus(result)).toBe(200);
-      expect(mockUpdateUser).toHaveBeenCalledWith('user-1', body);
+      expect(resultStatus(result)).toBe(400);
+      expect(resultJson(result)).toEqual({ error });
+      expect(mockGetUser).not.toHaveBeenCalled();
+      expect(mockPutUser).not.toHaveBeenCalled();
+      expect(mockUpdateUser).not.toHaveBeenCalled();
+    });
+
+    it('rejects malformed JSON with 400', async () => {
+      const result = await put({ rawBody: '{not json' });
+
+      expect(resultStatus(result)).toBe(400);
+      expect(resultJson(result)).toEqual({ error: 'Invalid JSON' });
+      expect(mockGetUser).not.toHaveBeenCalled();
+      expect(mockPutUser).not.toHaveBeenCalled();
+      expect(mockUpdateUser).not.toHaveBeenCalled();
+    });
+
+    it.each(['null', '[]', '"text"', '42', 'true'])('rejects a JSON body of %s with 400', async (rawBody) => {
+      const result = await put({ rawBody });
+
+      expect(resultStatus(result)).toBe(400);
+      expect(resultJson(result)).toEqual({ error: 'Request body must be a JSON object' });
+      expect(mockGetUser).not.toHaveBeenCalled();
+      expect(mockPutUser).not.toHaveBeenCalled();
+      expect(mockUpdateUser).not.toHaveBeenCalled();
     });
   });
 
-  // Documents a known gap: the body is parsed with JSON.parse and then read without any
-  // checks. Malformed JSON, or a body of `null`, throws and surfaces as a generic 500, where
-  // a client error (400) would be correct. Update when input validation is added.
-  it('currently returns a generic 500 for malformed JSON instead of a 400', async () => {
-    const result = await put({ rawBody: '{not json' });
-
-    expect(resultStatus(result)).toBe(500);
-    expect(resultJson(result)).toEqual({ error: 'Internal server error' });
-    expect(mockPutUser).not.toHaveBeenCalled();
+  it('checks ownership before validating the body (403, not 400)', async () => {
+    const result = await put({ body: { displayName: '' } }, 'user-2');
+    expect(resultStatus(result)).toBe(403);
   });
 
-  it('currently returns a generic 500 for a JSON null body instead of a 400', async () => {
-    mockGetUser.mockResolvedValue(user({ userId: 'user-1' }));
-
-    const result = await put({ rawBody: 'null' });
-
-    expect(resultStatus(result)).toBe(500);
-    expect(mockUpdateUser).not.toHaveBeenCalled();
+  it('checks authentication before validating the body (401, not 400)', async () => {
+    const result = await put({ sub: null, rawBody: '{not json' });
+    expect(resultStatus(result)).toBe(401);
   });
 });
 
