@@ -44,6 +44,7 @@ Nearby Friends is an academic-purpose serverless real-time location sharing back
 - **Testing**:
   - Unit tests: `jest` with `ts-jest`.
   - Property-based tests: `fast-check` (minimum 100 iterations per property test).
+  - AWS mocking: `aws-sdk-client-mock` for the wrappers in `src/utils`; handler tests replace those wrappers with `jest.mock()`.
 - **Runtime Parameters (AWS SSM)**:
   - Search radius: `/nearby-friends/search-radius-miles` (default: 5)
   - Inactivity TTL: `/nearby-friends/inactivity-ttl-seconds` (default: 600)
