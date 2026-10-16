@@ -284,18 +284,22 @@ describe('rest-handler: PUT /users/{userId}/profile', () => {
   });
 
   // Documents a known gap: the body is parsed with JSON.parse and then read without any
-  // checks. Malformed JSON, or a body of `null`, throws; because of the missing-await gap in
-  // the router (see rest-handler.friends.test.ts) the error currently escapes instead of
-  // becoming a 400. Update when both are fixed.
-  it('currently throws on malformed JSON instead of returning 400', async () => {
-    await expect(put({ rawBody: '{not json' })).rejects.toThrow(SyntaxError);
+  // checks. Malformed JSON, or a body of `null`, throws and surfaces as a generic 500, where
+  // a client error (400) would be correct. Update when input validation is added.
+  it('currently returns a generic 500 for malformed JSON instead of a 400', async () => {
+    const result = await put({ rawBody: '{not json' });
+
+    expect(resultStatus(result)).toBe(500);
+    expect(resultJson(result)).toEqual({ error: 'Internal server error' });
     expect(mockPutUser).not.toHaveBeenCalled();
   });
 
-  it('currently throws on a JSON null body instead of returning 400', async () => {
+  it('currently returns a generic 500 for a JSON null body instead of a 400', async () => {
     mockGetUser.mockResolvedValue(user({ userId: 'user-1' }));
 
-    await expect(put({ rawBody: 'null' })).rejects.toThrow(TypeError);
+    const result = await put({ rawBody: 'null' });
+
+    expect(resultStatus(result)).toBe(500);
     expect(mockUpdateUser).not.toHaveBeenCalled();
   });
 });

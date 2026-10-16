@@ -28,57 +28,57 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     // Route matching
     // GET /friends   (must be checked BEFORE /friends/{friendId})
     if (method === 'GET' && path === '/friends') {
-      return handleGetFriends(event);
+      return await handleGetFriends(event);
     }
 
     // DELETE /friends/{friendId}
     if (method === 'DELETE' && path.match(/^\/friends\/[^/]+$/)) {
-      return handleRemoveFriend(event);
+      return await handleRemoveFriend(event);
     }
 
     // POST /friend-requests/{toUserId}
     if (method === 'POST' && path.match(/^\/friend-requests\/[^/]+$/)) {
-      return handleCreateFriendRequest(event);
+      return await handleCreateFriendRequest(event);
     }
 
     // GET /friend-requests
     if (method === 'GET' && path === '/friend-requests') {
-      return handleGetFriendRequests(event);
+      return await handleGetFriendRequests(event);
     }
 
     // PUT /friend-requests/{requestId}/accept
     if (method === 'PUT' && path.match(/^\/friend-requests\/[^/]+\/accept$/)) {
-      return handleAcceptFriendRequest(event);
+      return await handleAcceptFriendRequest(event);
     }
 
     // PUT /friend-requests/{requestId}/decline
     if (method === 'PUT' && path.match(/^\/friend-requests\/[^/]+\/decline$/)) {
-      return handleDeclineFriendRequest(event);
+      return await handleDeclineFriendRequest(event);
     }
 
     // GET /users/{userId}/profile-picture-upload-url
     if (method === 'GET' && path.match(/^\/users\/[^/]+\/profile-picture-upload-url$/)) {
-      return handleGetUploadUrl(event);
+      return await handleGetUploadUrl(event);
     }
 
     // GET /users/{userId}/profile
     if (method === 'GET' && path.match(/^\/users\/[^/]+\/profile$/)) {
-      return handleGetProfile(event);
+      return await handleGetProfile(event);
     }
 
     // PUT /users/{userId}/profile
     if (method === 'PUT' && path.match(/^\/users\/[^/]+\/profile$/)) {
-      return handleUpdateProfile(event);
+      return await handleUpdateProfile(event);
     }
 
     // GET /nearby-friends (must be before nearby-strangers; neither uses path params)
     if (method === 'GET' && path === '/nearby-friends') {
-      return handleNearbyFriends(event);
+      return await handleNearbyFriends(event);
     }
 
     // GET /nearby-strangers
     if (method === 'GET' && path === '/nearby-strangers') {
-      return handleNearbyStrangers(event);
+      return await handleNearbyStrangers(event);
     }
 
     return response(404, { error: 'Not found' });
