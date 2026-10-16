@@ -45,6 +45,7 @@ interface RecordOptions {
   newLng?: string | null;
   oldLat?: string | null;
   oldLng?: string | null;
+  sequenceNumber?: string;
 }
 
 /** Builds a Connections-table stream record for a location update. */
@@ -57,6 +58,7 @@ function streamRecord(opts: RecordOptions = {}): DynamoDBRecord {
     newLng = String(ORIGIN.lng),
     oldLat = '0',
     oldLng = '0',
+    sequenceNumber,
   } = opts;
 
   const newImage: NonNullable<DynamoDBRecord['dynamodb']>['NewImage'] = {};
@@ -69,7 +71,14 @@ function streamRecord(opts: RecordOptions = {}): DynamoDBRecord {
   if (oldLat !== null) oldImage.latitude = { N: oldLat };
   if (oldLng !== null) oldImage.longitude = { N: oldLng };
 
-  return { eventName, dynamodb: { NewImage: newImage, OldImage: oldImage } };
+  return {
+    eventName,
+    dynamodb: {
+      NewImage: newImage,
+      OldImage: oldImage,
+      ...(sequenceNumber ? { SequenceNumber: sequenceNumber } : {}),
+    },
+  };
 }
 
 const eventOf = (...records: DynamoDBRecord[]): DynamoDBStreamEvent => ({ Records: records });
@@ -320,7 +329,7 @@ describe('fanout-handler: failure handling', () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('first'), expect.any(Error));
   });
 
-  it('one failing record does not block later records in the batch', async () => {
+  it('a failing post for one record does not block later records in the batch', async () => {
     mockPost.mockRejectedValue(new Error('boom'));
 
     await handler(eventOf(streamRecord({ userId: 'user-1' }), streamRecord({ userId: 'user-2' })));
@@ -336,5 +345,94 @@ describe('fanout-handler: failure handling', () => {
     await handler(eventOf(streamRecord()));
 
     expect(mockDeleteConnection).not.toHaveBeenCalled();
+  });
+});
+
+// Lookup failures (DynamoDB throttling, network, permissions) used to reject the whole
+// invocation, so Lambda retried the entire batch: records that had already been sent were
+// re-sent, and one persistently failing record blocked the shard. The handler now reports
+// only the failed records via a partial batch response (ReportBatchItemFailures).
+describe('fanout-handler: lookup failures (partial batch response)', () => {
+  beforeEach(() => {
+    mockGetFriends.mockResolvedValue([friendship('friend-1')]);
+    givenConnections({ 'friend-1': [connection({ connectionId: 'conn-A' })] });
+  });
+
+  it('reports no failures when every record succeeds', async () => {
+    const result = await handler(eventOf(streamRecord({ sequenceNumber: '100' })));
+    expect(result).toEqual({ batchItemFailures: [] });
+  });
+
+  it('reports a record whose friend lookup fails, instead of rejecting the invocation', async () => {
+    mockGetFriends.mockRejectedValueOnce(new Error('ProvisionedThroughputExceededException'));
+
+    const result = await handler(eventOf(streamRecord({ sequenceNumber: '100' })));
+
+    expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: '100' }] });
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('100'), expect.any(Error));
+  });
+
+  it('reports a record whose connection lookup fails', async () => {
+    mockGetConnections.mockRejectedValueOnce(new Error('network down'));
+
+    const result = await handler(eventOf(streamRecord({ sequenceNumber: '100' })));
+
+    expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: '100' }] });
+  });
+
+  it('still processes later records after one record fails', async () => {
+    mockGetFriends.mockRejectedValueOnce(new Error('boom'));
+
+    const result = await handler(
+      eventOf(
+        streamRecord({ userId: 'user-1', sequenceNumber: '100' }),
+        streamRecord({ userId: 'user-2', sequenceNumber: '101' })
+      )
+    );
+
+    expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: '100' }] });
+    expect(mockGetFriends).toHaveBeenCalledTimes(2);
+    expect(mockPost).toHaveBeenCalledTimes(1); // user-2's friend was notified
+    expect(mockPost).toHaveBeenCalledWith('conn-A', expect.objectContaining({ friendId: 'user-2' }));
+  });
+
+  it('reports every failed record, in order', async () => {
+    mockGetFriends.mockRejectedValue(new Error('boom'));
+
+    const result = await handler(
+      eventOf(
+        streamRecord({ userId: 'user-1', sequenceNumber: '100' }),
+        streamRecord({ userId: 'user-2', sequenceNumber: '101' })
+      )
+    );
+
+    expect(result).toEqual({ batchItemFailures: [{ itemIdentifier: '100' }, { itemIdentifier: '101' }] });
+  });
+
+  it('never reports ignored records as failures', async () => {
+    const result = await handler(
+      eventOf(
+        streamRecord({ eventName: 'INSERT', sequenceNumber: '100' }),
+        streamRecord({ newLat: null, newLng: null, sequenceNumber: '101' })
+      )
+    );
+
+    expect(result).toEqual({ batchItemFailures: [] });
+  });
+
+  it('does not report a failed post as a batch failure (it is handled per connection)', async () => {
+    mockPost.mockRejectedValue(new Error('boom'));
+
+    const result = await handler(eventOf(streamRecord({ sequenceNumber: '100' })));
+
+    expect(result).toEqual({ batchItemFailures: [] });
+  });
+
+  // Without a sequence number the failure cannot be reported, so fall back to failing the
+  // whole invocation and let Lambda retry the batch rather than silently dropping the record.
+  it('rethrows when a failed record has no sequence number to report', async () => {
+    mockGetFriends.mockRejectedValueOnce(new Error('boom'));
+
+    await expect(handler(eventOf(streamRecord()))).rejects.toThrow('boom');
   });
 });
