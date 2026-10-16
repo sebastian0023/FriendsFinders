@@ -95,18 +95,25 @@ describe('s3-client: generateUploadUrl', () => {
     expect(params.get('x-id')).toBe('PutObject');
   });
 
-  // Documents a known gap: the command declares ContentType 'image/jpeg', but the presigned URL
-  // signs only the host header. S3 therefore accepts a PUT with any Content-Type (and any
-  // size), so the "JPEG only" intent is not enforced. Signing content-type (for example with
-  // the presigner's `unhoistableHeaders` option) would enforce the type. Update when fixed.
-  it('currently signs only the host header, so the content type is not enforced', async () => {
+  // The S3 presigner leaves content-type out of the signature by default, which would let a
+  // client upload any type through a URL meant for a JPEG. Signing it makes S3 reject a PUT
+  // whose Content-Type header is not exactly image/jpeg.
+  it('signs the content type, so S3 rejects an upload that is not image/jpeg', async () => {
     const { generateUploadUrl } = loadS3();
 
     const { uploadUrl } = await generateUploadUrl('user-1');
     const params = new URL(uploadUrl).searchParams;
 
-    expect(params.get('X-Amz-SignedHeaders')).toBe('host');
-    expect(params.get('X-Amz-SignedHeaders')).not.toContain('content-type');
+    expect(params.get('X-Amz-SignedHeaders')).toBe('content-type;host');
+  });
+
+  it('keeps the content type as a header the client must send, not a query parameter', async () => {
+    const { generateUploadUrl } = loadS3();
+
+    const { uploadUrl } = await generateUploadUrl('user-1');
+    const names = [...new URL(uploadUrl).searchParams.keys()].map((name) => name.toLowerCase());
+
+    expect(names).not.toContain('content-type');
   });
 
   it('fails loudly when no bucket is configured', async () => {
@@ -126,6 +133,16 @@ describe('s3-client: generateDownloadUrl', () => {
     expect(url.hostname).toBe('my-pictures.s3.us-east-1.amazonaws.com');
     expect(url.pathname).toBe('/profile-pictures/user-1/photo.jpg');
     expect(url.searchParams.get('x-id')).toBe('GetObject');
+  });
+
+  // Defence in depth: whatever Content-Type an object was stored with (including objects
+  // uploaded before the upload URL signed it), S3 serves it as an image, never as HTML.
+  it('forces the response content type to image/jpeg', async () => {
+    const { generateDownloadUrl } = loadS3();
+
+    const downloadUrl = await generateDownloadUrl('profile-pictures/user-1/photo.jpg');
+
+    expect(new URL(downloadUrl).searchParams.get('response-content-type')).toBe('image/jpeg');
   });
 
   it('expires after 1 hour', async () => {
