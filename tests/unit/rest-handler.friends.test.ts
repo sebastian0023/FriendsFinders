@@ -177,16 +177,43 @@ describe('rest-handler: routing', () => {
     expect(resultHeaders(result)).toEqual({ 'Content-Type': 'application/json' });
   });
 
-  // Documents a known gap: every route does `return handleX(event)` inside the try block
-  // without `await`, so a rejected promise bypasses the catch (which is therefore effectively
-  // unreachable). The intended behaviour is a JSON 500 ({ error: 'Internal server error' })
-  // with the error logged. Until fixed, the raw error escapes and API Gateway answers with
-  // its own non-JSON 500. Update this test when fixed.
-  it('currently lets an unexpected error escape instead of returning a JSON 500', async () => {
+  // Routes must be awaited inside the try block; otherwise a rejected promise bypasses the
+  // catch and API Gateway answers with its own non-JSON 500.
+  it('turns an unexpected error into a generic JSON 500 and logs it', async () => {
     mockGetFriends.mockRejectedValue(new Error('DynamoDB exploded'));
 
-    await expect(handler(restEvent('GET', '/friends'))).rejects.toThrow('DynamoDB exploded');
-    expect(errorSpy).not.toHaveBeenCalled();
+    const result = await handler(restEvent('GET', '/friends'));
+
+    expect(resultStatus(result)).toBe(500);
+    expect(resultJson(result)).toEqual({ error: 'Internal server error' }); // no internals leaked
+    expect(errorSpy).toHaveBeenCalledWith('Unhandled error:', expect.any(Error));
+  });
+
+  it.each([
+    ['GET', '/friends'],
+    ['DELETE', '/friends/friend-1'],
+    ['POST', '/friend-requests/user-2'],
+    ['GET', '/friend-requests'],
+    ['PUT', '/friend-requests/req-1/accept'],
+    ['PUT', '/friend-requests/req-1/decline'],
+    ['GET', '/users/user-1/profile'],
+    ['PUT', '/users/user-1/profile'],
+    ['GET', '/users/user-1/profile-picture-upload-url'],
+    ['GET', '/nearby-friends'],
+    ['GET', '/nearby-strangers'],
+  ])('%s %s also returns a JSON 500 when its data layer fails', async (method, path) => {
+    const dataCalls = Object.values(dynamo).filter((fn) => jest.isMockFunction(fn)) as jest.Mock[];
+    try {
+      for (const call of dataCalls) call.mockRejectedValue(new Error('boom'));
+
+      const result = await handler(restEvent(method, path, { body: {} }));
+
+      expect(resultStatus(result)).toBe(500);
+      expect(resultJson(result)).toEqual({ error: 'Internal server error' });
+    } finally {
+      // Back to a bare jest.fn() so rejecting mocks cannot leak into later tests.
+      for (const call of dataCalls) call.mockReset();
+    }
   });
 });
 
@@ -256,12 +283,13 @@ describe('rest-handler: DELETE /friends/{friendId}', () => {
   });
 
   // Documents current behaviour: the two deletes are separate writes, so a failure on the
-  // second leaves the friendship removed on one side only. The error currently escapes
-  // (see the routing gap above) rather than becoming a JSON 500.
-  it('fails after the first delete when the second one fails, leaving a half-removed friendship', async () => {
+  // second leaves the friendship removed on one side only.
+  it('returns 500 after the first delete when the second one fails, leaving a half-removed friendship', async () => {
     mockDeleteFriendship.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('throttled'));
 
-    await expect(handler(restEvent('DELETE', '/friends/friend-1'))).rejects.toThrow('throttled');
+    const result = await handler(restEvent('DELETE', '/friends/friend-1'));
+
+    expect(resultStatus(result)).toBe(500);
     expect(mockDeleteFriendship).toHaveBeenCalledTimes(2);
   });
 });
@@ -484,11 +512,12 @@ describe('rest-handler: PUT /friend-requests/{requestId}/accept', () => {
 
   // Documents current behaviour: the two friendship writes are separate, so a failure on
   // the second leaves a one-sided friendship, and the request is neither deleted nor retried.
-  // The error currently escapes (see the routing gap above) rather than becoming a JSON 500.
-  it('fails and keeps the request when the second friendship write fails, leaving a one-sided friendship', async () => {
+  it('returns 500 and keeps the request when the second friendship write fails, leaving a one-sided friendship', async () => {
     mockPutFriendship.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('throttled'));
 
-    await expect(accept()).rejects.toThrow('throttled');
+    const result = await accept();
+
+    expect(resultStatus(result)).toBe(500);
     expect(mockPutFriendship).toHaveBeenCalledTimes(2);
     expect(mockDeleteFriendRequest).not.toHaveBeenCalled();
   });
