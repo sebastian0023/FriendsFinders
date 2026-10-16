@@ -518,23 +518,106 @@ describe('rest-handler: GET /nearby-strangers', () => {
       expect(resultJson(result).map((s: { userId: string }) => s.userId)).toEqual(['s1', 's2']);
     });
 
-    // Documents a known gap: candidates are built per connection, not per user, so a
-    // stranger with two live connections (e.g. phone and laptop) is listed twice. The
-    // intended behaviour is one entry per user, using their nearest or latest connection.
-    // Update this test when fixed.
-    it('currently lists a stranger once per live connection', async () => {
-      mockGetActiveConnections.mockResolvedValue([
-        stranger('s1', 0.01, { connectionId: 'phone' }),
-        stranger('s1', 0.02, { connectionId: 'laptop' }),
-      ]);
-      givenUsers({ s1: profile({ userId: 's1' }) });
+    describe('a stranger with several live connections (e.g. phone and laptop)', () => {
+      const EARLIER = '2026-10-15T10:00:00.000Z';
+      const LATER = '2026-10-15T11:00:00.000Z';
 
-      const result = await nearbyStrangers();
+      beforeEach(() => {
+        givenUsers({ s1: profile({ userId: 's1' }), s2: profile({ userId: 's2' }), s3: profile({ userId: 's3' }) });
+      });
 
-      expect(resultJson(result).map((s: { userId: string; distanceMiles: number }) => [s.userId, s.distanceMiles])).toEqual([
-        ['s1', 0.69],
-        ['s1', 1.38],
-      ]);
+      it('is listed once, at the distance of their nearest connection', async () => {
+        mockGetActiveConnections.mockResolvedValue([
+          stranger('s1', 0.02, { connectionId: 'laptop' }),
+          stranger('s1', 0.01, { connectionId: 'phone' }),
+        ]);
+
+        const result = await nearbyStrangers();
+
+        expect(resultJson(result)).toEqual([expect.objectContaining({ userId: 's1', distanceMiles: 0.69 })]);
+      });
+
+      it('does not depend on the order the connections were scanned in', async () => {
+        mockGetActiveConnections.mockResolvedValue([
+          stranger('s1', 0.01, { connectionId: 'phone' }),
+          stranger('s1', 0.02, { connectionId: 'laptop' }),
+        ]);
+
+        const result = await nearbyStrangers();
+
+        expect(resultJson(result)).toEqual([expect.objectContaining({ userId: 's1', distanceMiles: 0.69 })]);
+      });
+
+      it('is listed when any connection is in range, even if the most recent one is far away', async () => {
+        mockGetActiveConnections.mockResolvedValue([
+          stranger('s1', 0.01, { connectionId: 'old-near', timestamp: EARLIER }),
+          stranger('s1', 0.1, { connectionId: 'new-far', timestamp: LATER }),
+        ]);
+
+        const result = await nearbyStrangers();
+
+        expect(resultJson(result)).toEqual([expect.objectContaining({ userId: 's1', distanceMiles: 0.69 })]);
+      });
+
+      it('is left out only when every connection is out of range', async () => {
+        mockGetActiveConnections.mockResolvedValue([
+          stranger('s1', 0.1, { connectionId: 'phone' }),
+          stranger('s1', 0.2, { connectionId: 'laptop' }),
+        ]);
+
+        const result = await nearbyStrangers();
+
+        expect(resultJson(result)).toEqual([]);
+      });
+
+      it('does not depend on timestamps, which may be missing', async () => {
+        mockGetActiveConnections.mockResolvedValue([
+          stranger('s1', 0.02, { connectionId: 'timed', timestamp: LATER }),
+          stranger('s1', 0.01, { connectionId: 'untimed', timestamp: undefined }),
+        ]);
+
+        const result = await nearbyStrangers();
+
+        expect(resultJson(result)).toEqual([expect.objectContaining({ userId: 's1', distanceMiles: 0.69 })]);
+      });
+
+      it('looks the profile up once per user, not once per connection', async () => {
+        mockGetActiveConnections.mockResolvedValue([
+          stranger('s1', 0.01, { connectionId: 'phone' }),
+          stranger('s1', 0.02, { connectionId: 'laptop' }),
+        ]);
+
+        await nearbyStrangers();
+
+        expect(mockGetUser).toHaveBeenCalledTimes(1);
+        expect(mockGetUser).toHaveBeenCalledWith('s1');
+      });
+
+      it('does not use up several slots of the cap', async () => {
+        mockGetConfig.mockResolvedValue({ ...CONFIG, nearbyStrangersLimit: 2 });
+        mockGetActiveConnections.mockResolvedValue([
+          stranger('s1', 0.01, { connectionId: 'phone' }),
+          stranger('s1', 0.01, { connectionId: 'laptop' }),
+          stranger('s2', 0.02),
+          stranger('s3', 0.03),
+        ]);
+
+        const result = await nearbyStrangers();
+
+        expect(resultJson(result).map((s: { userId: string }) => s.userId)).toEqual(['s1', 's2']);
+      });
+
+      it('is still excluded when they are a friend, whichever connection is nearest', async () => {
+        mockGetFriends.mockResolvedValue([friendship('s1')]);
+        mockGetActiveConnections.mockResolvedValue([
+          stranger('s1', 0.01, { connectionId: 'phone' }),
+          stranger('s1', 0.02, { connectionId: 'laptop' }),
+        ]);
+
+        const result = await nearbyStrangers();
+
+        expect(resultJson(result)).toEqual([]);
+      });
     });
   });
 });
