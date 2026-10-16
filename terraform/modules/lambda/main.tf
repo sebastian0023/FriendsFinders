@@ -104,6 +104,14 @@ resource "aws_lambda_event_source_mapping" "connections_stream" {
   starting_position = "LATEST"
   batch_size        = 10
 
+  # The handler returns { batchItemFailures }; without this Lambda ignores the response
+  # and treats every invocation as fully successful, silently dropping failed records.
+  function_response_types = ["ReportBatchItemFailures"]
+
+  # Give up on a failing record after 3 retries so it cannot block its shard for 24h.
+  # Safe for this stream: the next location update (every ~30s) supersedes a dropped one.
+  maximum_retry_attempts = 3
+
   filter_criteria {
     filter {
       pattern = jsonencode({ eventName = ["INSERT", "MODIFY", "REMOVE"] })
