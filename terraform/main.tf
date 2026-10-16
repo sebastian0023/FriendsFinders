@@ -6,7 +6,7 @@ terraform {
   # The bucket name is account-specific, so it is NOT set here. Supply it at init:
   #   terraform init -backend-config=backend.hcl   (see backend.hcl.example)
   backend "s3" {
-    key           = "friendsfinders/terraform.tfstate"
+    key            = "friendsfinders/terraform.tfstate"
     region         = "us-east-1"
     dynamodb_table = "friendsfinders-tf-lock"
     encrypt        = true
