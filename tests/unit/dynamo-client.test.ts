@@ -165,15 +165,23 @@ describe('dynamo-client: connections', () => {
     });
   });
 
-  // Documents a known gap: the Query is sent once and LastEvaluatedKey is ignored, so
-  // results past DynamoDB's 1 MB page limit are silently dropped.
-  it('getConnectionsByUserId reads only the first page of results', async () => {
-    ddb.on(QueryCommand).resolves({ Items: [connection()], LastEvaluatedKey: { connectionId: 'conn-1' } });
+  it('getConnectionsByUserId follows LastEvaluatedKey, so no connection is missed', async () => {
+    ddb
+      .on(QueryCommand)
+      .resolvesOnce({ Items: [connection({ connectionId: 'conn-1' })], LastEvaluatedKey: { connectionId: 'conn-1' } })
+      .resolvesOnce({ Items: [connection({ connectionId: 'conn-2' })] });
 
     const result = await db.getConnectionsByUserId('user-1');
 
-    expect(result).toHaveLength(1);
-    expect(ddb.commandCalls(QueryCommand)).toHaveLength(1);
+    expect(result.map((c) => c.connectionId)).toEqual(['conn-1', 'conn-2']);
+    const calls = ddb.commandCalls(QueryCommand);
+    expect(calls).toHaveLength(2);
+    expect((inputOf(calls, 0) as any).ExclusiveStartKey).toBeUndefined();
+    expect(inputOf(calls, 1)).toMatchObject({
+      IndexName: 'userId-index',
+      KeyConditionExpression: 'userId = :uid',
+      ExclusiveStartKey: { connectionId: 'conn-1' },
+    });
   });
 });
 
@@ -201,15 +209,76 @@ describe('dynamo-client: active connections (scan)', () => {
     expect(await db.getActiveConnections()).toEqual([]);
   });
 
-  // Documents a known gap: a Scan reads at most 1 MB before filtering, and LastEvaluatedKey
-  // is ignored, so on a large table nearby strangers are silently missing.
-  it('reads only the first page of the scan', async () => {
-    ddb.on(ScanCommand).resolves({ Items: [connection()], LastEvaluatedKey: { connectionId: 'conn-1' } });
+  it('follows LastEvaluatedKey until the whole table has been read', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(1_800_000_123_456);
+    ddb
+      .on(ScanCommand)
+      .resolvesOnce({ Items: [connection({ connectionId: 'c1' })], LastEvaluatedKey: { connectionId: 'c1' } })
+      .resolvesOnce({ Items: [connection({ connectionId: 'c2' })], LastEvaluatedKey: { connectionId: 'c2' } })
+      .resolvesOnce({ Items: [connection({ connectionId: 'c3' })] });
 
     const result = await db.getActiveConnections();
 
-    expect(result).toHaveLength(1);
-    expect(ddb.commandCalls(ScanCommand)).toHaveLength(1);
+    expect(result.map((c) => c.connectionId)).toEqual(['c1', 'c2', 'c3']);
+    const calls = ddb.commandCalls(ScanCommand);
+    expect(calls).toHaveLength(3);
+    expect((inputOf(calls, 0) as any).ExclusiveStartKey).toBeUndefined();
+    expect((inputOf(calls, 1) as any).ExclusiveStartKey).toEqual({ connectionId: 'c1' });
+    expect((inputOf(calls, 2) as any).ExclusiveStartKey).toEqual({ connectionId: 'c2' });
+    // every page applies the same filter
+    for (const index of [0, 1, 2]) {
+      expect(inputOf(calls, index)).toMatchObject({
+        TableName: 'Connections',
+        FilterExpression: 'expiresAt > :now AND attribute_exists(latitude) AND attribute_exists(longitude)',
+      });
+    }
+  });
+
+  it('uses the same time on every page', async () => {
+    jest.spyOn(Date, 'now').mockReturnValueOnce(1_800_000_000_000).mockReturnValue(1_900_000_000_000);
+    ddb
+      .on(ScanCommand)
+      .resolvesOnce({ Items: [connection()], LastEvaluatedKey: { connectionId: 'x' } })
+      .resolvesOnce({ Items: [connection()] });
+
+    await db.getActiveConnections();
+
+    const calls = ddb.commandCalls(ScanCommand);
+    expect((inputOf(calls, 0) as any).ExpressionAttributeValues[':now']).toBe(1_800_000_000);
+    expect((inputOf(calls, 1) as any).ExpressionAttributeValues[':now']).toBe(1_800_000_000);
+  });
+
+  // A Scan reads the whole table, so one request must never turn into an unbounded read.
+  describe('safety cap', () => {
+    it('stops after 20 pages and warns that the results are incomplete', async () => {
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      ddb.on(ScanCommand).callsFake(async () => ({
+        Items: [connection()],
+        LastEvaluatedKey: { connectionId: 'more' },
+      }));
+
+      const result = await db.getActiveConnections();
+
+      expect(ddb.commandCalls(ScanCommand)).toHaveLength(20);
+      expect(result).toHaveLength(20); // what was read before stopping is still returned
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/Connections.*20 pages.*incomplete/));
+    });
+
+    it('does not warn when the twentieth page is also the last', async () => {
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      let page = 0;
+      ddb.on(ScanCommand).callsFake(async () => {
+        page += 1;
+        return page < 20 ? { Items: [connection()], LastEvaluatedKey: { connectionId: 'more' } } : { Items: [connection()] };
+      });
+
+      const result = await db.getActiveConnections();
+
+      expect(ddb.commandCalls(ScanCommand)).toHaveLength(20);
+      expect(result).toHaveLength(20);
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -573,6 +642,20 @@ describe('dynamo-client: friend requests', () => {
       KeyConditionExpression: 'toUserId = :tuid',
       ExpressionAttributeValues: { ':tuid': 'user-1' },
     });
+  });
+
+  it('getFriendRequestsByToUser follows LastEvaluatedKey', async () => {
+    ddb
+      .on(QueryCommand)
+      .resolvesOnce({ Items: [request], LastEvaluatedKey: { requestId: 'req-1' } })
+      .resolvesOnce({ Items: [{ ...request, requestId: 'req-2' }] });
+
+    const result = await db.getFriendRequestsByToUser('user-1');
+
+    expect(result.map((r) => r.requestId)).toEqual(['req-1', 'req-2']);
+    const calls = ddb.commandCalls(QueryCommand);
+    expect(calls).toHaveLength(2);
+    expect((inputOf(calls, 1) as any).ExclusiveStartKey).toEqual({ requestId: 'req-1' });
   });
 
   it('getFriendRequestsByToUser returns an empty list when nothing matches', async () => {

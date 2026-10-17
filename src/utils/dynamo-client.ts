@@ -9,6 +9,9 @@ import {
   ScanCommand,
   TransactWriteCommand,
   TransactWriteCommandInput,
+  QueryCommandInput,
+  QueryCommandOutput,
+  ScanCommandInput,
 } from '@aws-sdk/lib-dynamodb';
 import { ConnectionRecord, UserProfile, FriendRequest } from '../types';
 
@@ -21,6 +24,58 @@ const CONNECTIONS_TABLE = process.env.CONNECTIONS_TABLE_NAME || 'Connections';
 const USERS_TABLE = process.env.USERS_TABLE_NAME || 'Users';
 const FRIEND_REQUESTS_TABLE = process.env.FRIEND_REQUESTS_TABLE_NAME || 'FriendRequests';
 const FRIENDSHIPS_TABLE = process.env.FRIENDSHIPS_TABLE_NAME || 'Friendships';
+
+// --- Pagination ---
+//
+// DynamoDB returns at most 1 MB per request and reports "there is more" with LastEvaluatedKey.
+
+type Item = Record<string, any>;
+
+/** Runs a Query to the end, yielding one page at a time. */
+async function* queryPages(input: QueryCommandInput): AsyncGenerator<QueryCommandOutput> {
+  let startKey: Record<string, any> | undefined;
+  do {
+    const page = await docClient.send(new QueryCommand({
+      ...input,
+      ...(startKey ? { ExclusiveStartKey: startKey } : {}),
+    }));
+    yield page;
+    startKey = page.LastEvaluatedKey;
+  } while (startKey);
+}
+
+/** Runs a Query to the end and collects every item. */
+async function queryItems(input: QueryCommandInput): Promise<Item[]> {
+  const items: Item[] = [];
+  for await (const page of queryPages(input)) {
+    items.push(...(page.Items || []));
+  }
+  return items;
+}
+
+// A Scan reads the whole table, so one request may read only this many pages.
+const MAX_SCAN_PAGES = 20;
+
+/** Runs a Scan to the end, or until the page cap, and collects every item read. */
+async function scanItems(input: ScanCommandInput): Promise<Item[]> {
+  const items: Item[] = [];
+  let startKey: Record<string, any> | undefined;
+
+  for (let page = 1; ; page++) {
+    const result = await docClient.send(new ScanCommand({
+      ...input,
+      ...(startKey ? { ExclusiveStartKey: startKey } : {}),
+    }));
+    items.push(...(result.Items || []));
+
+    startKey = result.LastEvaluatedKey;
+    if (!startKey) return items;
+    if (page >= MAX_SCAN_PAGES) {
+      console.warn(`Scan of ${input.TableName} stopped after ${MAX_SCAN_PAGES} pages; the results are incomplete`);
+      return items;
+    }
+  }
+}
 
 // --- Connections Table ---
 
@@ -47,13 +102,13 @@ export async function getConnection(connectionId: string): Promise<ConnectionRec
 }
 
 export async function getConnectionsByUserId(userId: string): Promise<ConnectionRecord[]> {
-  const result = await docClient.send(new QueryCommand({
+  const items = await queryItems({
     TableName: CONNECTIONS_TABLE,
     IndexName: 'userId-index',
     KeyConditionExpression: 'userId = :uid',
     ExpressionAttributeValues: { ':uid': userId },
-  }));
-  return (result.Items || []) as ConnectionRecord[];
+  });
+  return items as ConnectionRecord[];
 }
 
 export async function updateConnectionLocation(
@@ -84,41 +139,24 @@ export async function updateConnectionLocation(
 // transaction. Friends live in their own table so a profile read never drags a friend list along.
 
 export async function getFriends(userId: string): Promise<{ userId: string; friendId: string; createdAt: string }[]> {
-  const friends: { userId: string; friendId: string; createdAt: string }[] = [];
-  let startKey: Record<string, unknown> | undefined;
-
-  do {
-    const result = await docClient.send(new QueryCommand({
-      TableName: FRIENDSHIPS_TABLE,
-      KeyConditionExpression: 'userId = :uid',
-      ExpressionAttributeValues: { ':uid': userId },
-      ...(startKey ? { ExclusiveStartKey: startKey } : {}),
-    }));
-    for (const item of result.Items || []) {
-      friends.push({ userId: item.userId, friendId: item.friendId, createdAt: item.createdAt });
-    }
-    startKey = result.LastEvaluatedKey;
-  } while (startKey);
-
-  return friends;
+  const items = await queryItems({
+    TableName: FRIENDSHIPS_TABLE,
+    KeyConditionExpression: 'userId = :uid',
+    ExpressionAttributeValues: { ':uid': userId },
+  });
+  return items.map((item) => ({ userId: item.userId, friendId: item.friendId, createdAt: item.createdAt }));
 }
 
 export async function getFriendCount(userId: string): Promise<number> {
   let count = 0;
-  let startKey: Record<string, unknown> | undefined;
-
-  do {
-    const result = await docClient.send(new QueryCommand({
-      TableName: FRIENDSHIPS_TABLE,
-      KeyConditionExpression: 'userId = :uid',
-      ExpressionAttributeValues: { ':uid': userId },
-      Select: 'COUNT',
-      ...(startKey ? { ExclusiveStartKey: startKey } : {}),
-    }));
-    count += result.Count || 0;
-    startKey = result.LastEvaluatedKey;
-  } while (startKey);
-
+  for await (const page of queryPages({
+    TableName: FRIENDSHIPS_TABLE,
+    KeyConditionExpression: 'userId = :uid',
+    ExpressionAttributeValues: { ':uid': userId },
+    Select: 'COUNT',
+  })) {
+    count += page.Count || 0;
+  }
   return count;
 }
 
@@ -271,13 +309,13 @@ export async function getFriendRequest(requestId: string): Promise<FriendRequest
 }
 
 export async function getFriendRequestsByToUser(toUserId: string): Promise<FriendRequest[]> {
-  const result = await docClient.send(new QueryCommand({
+  const items = await queryItems({
     TableName: FRIEND_REQUESTS_TABLE,
     IndexName: 'toUserId-index',
     KeyConditionExpression: 'toUserId = :tuid',
     ExpressionAttributeValues: { ':tuid': toUserId },
-  }));
-  return (result.Items || []) as FriendRequest[];
+  });
+  return items as FriendRequest[];
 }
 
 export async function deleteFriendRequest(requestId: string): Promise<void> {
@@ -291,10 +329,10 @@ export async function deleteFriendRequest(requestId: string): Promise<void> {
 
 export async function getActiveConnections(): Promise<ConnectionRecord[]> {
   const now = Math.floor(Date.now() / 1000);
-  const result = await docClient.send(new ScanCommand({
+  const items = await scanItems({
     TableName: CONNECTIONS_TABLE,
     FilterExpression: 'expiresAt > :now AND attribute_exists(latitude) AND attribute_exists(longitude)',
     ExpressionAttributeValues: { ':now': now },
-  }));
-  return (result.Items || []) as ConnectionRecord[];
+  });
+  return items as ConnectionRecord[];
 }
