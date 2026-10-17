@@ -25,3 +25,11 @@ output "friend_requests_table_name" {
 output "friend_requests_table_arn" {
   value = aws_dynamodb_table.friend_requests.arn
 }
+
+output "friendships_table_name" {
+  value = aws_dynamodb_table.friendships.name
+}
+
+output "friendships_table_arn" {
+  value = aws_dynamodb_table.friendships.arn
+}

@@ -99,6 +99,7 @@ module "iam" {
   connections_table_arn        = module.dynamodb.connections_table_arn
   connections_table_stream_arn = module.dynamodb.connections_table_stream_arn
   friend_requests_table_arn    = module.dynamodb.friend_requests_table_arn
+  friendships_table_arn        = module.dynamodb.friendships_table_arn
   s3_bucket_arn                = module.s3.bucket_arn
   ssm_parameter_arns           = module.ssm.parameter_arns
   websocket_api_arn            = local.websocket_api_arn
@@ -117,6 +118,7 @@ module "lambda" {
   users_table_name             = module.dynamodb.users_table_name
   connections_table_name       = module.dynamodb.connections_table_name
   friend_requests_table_name   = module.dynamodb.friend_requests_table_name
+  friendships_table_name       = module.dynamodb.friendships_table_name
   connections_table_stream_arn = module.dynamodb.connections_table_stream_arn
   s3_bucket_name               = module.s3.bucket_name
   websocket_api_endpoint       = local.websocket_api_endpoint

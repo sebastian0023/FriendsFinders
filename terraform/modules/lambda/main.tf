@@ -31,6 +31,7 @@ resource "aws_lambda_function" "websocket_handler" {
     variables = {
       USERS_TABLE_NAME             = var.users_table_name
       CONNECTIONS_TABLE_NAME       = var.connections_table_name
+      FRIENDSHIPS_TABLE_NAME       = var.friendships_table_name
       S3_BUCKET_NAME               = var.s3_bucket_name
       WEBSOCKET_API_ENDPOINT       = replace(var.websocket_api_endpoint, "wss://", "https://")
       SSM_SEARCH_RADIUS            = "/nearby-friends/search-radius-miles"
@@ -60,6 +61,7 @@ resource "aws_lambda_function" "rest_handler" {
       USERS_TABLE_NAME           = var.users_table_name
       CONNECTIONS_TABLE_NAME     = var.connections_table_name
       FRIEND_REQUESTS_TABLE_NAME = var.friend_requests_table_name
+      FRIENDSHIPS_TABLE_NAME     = var.friendships_table_name
       S3_BUCKET_NAME             = var.s3_bucket_name
       WEBSOCKET_API_ENDPOINT     = replace(var.websocket_api_endpoint, "wss://", "https://")
       SSM_SEARCH_RADIUS          = "/nearby-friends/search-radius-miles"
@@ -87,6 +89,7 @@ resource "aws_lambda_function" "fanout_handler" {
     variables = {
       USERS_TABLE_NAME       = var.users_table_name
       CONNECTIONS_TABLE_NAME = var.connections_table_name
+      FRIENDSHIPS_TABLE_NAME = var.friendships_table_name
       S3_BUCKET_NAME         = var.s3_bucket_name
       WEBSOCKET_API_ENDPOINT = replace(var.websocket_api_endpoint, "wss://", "https://")
       SSM_SEARCH_RADIUS      = "/nearby-friends/search-radius-miles"
