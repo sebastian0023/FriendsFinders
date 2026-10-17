@@ -7,7 +7,6 @@ import {
   QueryCommand,
   UpdateCommand,
   ScanCommand,
-  BatchGetCommand,
   TransactWriteCommand,
   TransactWriteCommandInput,
 } from '@aws-sdk/lib-dynamodb';
@@ -298,16 +297,4 @@ export async function getActiveConnections(): Promise<ConnectionRecord[]> {
     ExpressionAttributeValues: { ':now': now },
   }));
   return (result.Items || []) as ConnectionRecord[];
-}
-
-export async function batchGetConnections(connectionIds: string[]): Promise<ConnectionRecord[]> {
-  if (connectionIds.length === 0) return [];
-
-  const keys = connectionIds.map(id => ({ connectionId: id }));
-  const result = await docClient.send(new BatchGetCommand({
-    RequestItems: {
-      [CONNECTIONS_TABLE]: { Keys: keys },
-    },
-  }));
-  return (result.Responses?.[CONNECTIONS_TABLE] || []) as ConnectionRecord[];
 }

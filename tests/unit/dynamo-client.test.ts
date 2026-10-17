@@ -7,7 +7,6 @@ import {
   QueryCommand,
   UpdateCommand,
   ScanCommand,
-  BatchGetCommand,
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import * as db from '../../src/utils/dynamo-client';
@@ -211,53 +210,6 @@ describe('dynamo-client: active connections (scan)', () => {
 
     expect(result).toHaveLength(1);
     expect(ddb.commandCalls(ScanCommand)).toHaveLength(1);
-  });
-});
-
-describe('dynamo-client: batchGetConnections', () => {
-  it('does not call DynamoDB for an empty list', async () => {
-    expect(await db.batchGetConnections([])).toEqual([]);
-    expect(ddb.commandCalls(BatchGetCommand)).toHaveLength(0);
-  });
-
-  it('requests the connections by key and returns the table\'s responses', async () => {
-    ddb.on(BatchGetCommand).resolves({ Responses: { Connections: [connection(), connection({ connectionId: 'conn-2' })] } });
-
-    const result = await db.batchGetConnections(['conn-1', 'conn-2']);
-
-    expect(result.map((c) => c.connectionId)).toEqual(['conn-1', 'conn-2']);
-    expect(inputOf(ddb.commandCalls(BatchGetCommand))).toEqual({
-      RequestItems: { Connections: { Keys: [{ connectionId: 'conn-1' }, { connectionId: 'conn-2' }] } },
-    });
-  });
-
-  it('returns an empty list when the response has no items', async () => {
-    ddb.on(BatchGetCommand).resolves({});
-    expect(await db.batchGetConnections(['conn-1'])).toEqual([]);
-  });
-
-  // Documents known gaps (this function currently has no callers): UnprocessedKeys are
-  // dropped, and DynamoDB's limit of 100 keys per request is not respected.
-  it('drops UnprocessedKeys instead of retrying them', async () => {
-    ddb.on(BatchGetCommand).resolves({
-      Responses: { Connections: [connection()] },
-      UnprocessedKeys: { Connections: { Keys: [{ connectionId: 'conn-2' }] } },
-    });
-
-    const result = await db.batchGetConnections(['conn-1', 'conn-2']);
-
-    expect(result).toHaveLength(1);
-    expect(ddb.commandCalls(BatchGetCommand)).toHaveLength(1);
-  });
-
-  it('sends every key in one request, even above the 100-key limit', async () => {
-    const ids = Array.from({ length: 150 }, (_, i) => `conn-${i}`);
-
-    await db.batchGetConnections(ids);
-
-    expect(ddb.commandCalls(BatchGetCommand)).toHaveLength(1);
-    const input = inputOf(ddb.commandCalls(BatchGetCommand)) as any;
-    expect(input.RequestItems.Connections.Keys).toHaveLength(150);
   });
 });
 
