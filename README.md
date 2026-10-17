@@ -62,7 +62,7 @@ Full architecture diagrams live in [`generated-diagrams/`](generated-diagrams/):
 | API Gateway v2 (WebSocket) | Persistent bidirectional connections for real-time updates            |
 | API Gateway v2 (HTTP)      | REST endpoints with Cognito JWT authorizer                            |
 | AWS Lambda (3 handlers)    | All business logic — no VPC required                                  |
-| Amazon DynamoDB (3 tables) | Users (incl. embedded friend lists), Connections (with location + TTL), FriendRequests |
+| Amazon DynamoDB (4 tables) | Users (profiles), Friendships, Connections (with location, TTL and a geoCell index), FriendRequests |
 | DynamoDB Streams           | Triggers fan-out on location updates                                  |
 | Amazon S3 (2 buckets)      | Profile picture storage; frontend hosting (`index.html`)              |
 | Amazon CloudFront          | HTTPS delivery of the web frontend                                    |
@@ -75,12 +75,14 @@ Full architecture diagrams live in [`generated-diagrams/`](generated-diagrams/):
 | -------------- | ------------ | -- | -------------------- | --------- | ---------------------------------------------- |
 | Users          | userId       | —        | —                    | —         | Profile only                                   |
 | Friendships    | userId       | friendId | friendId-index       | —         | One item per direction, written in a transaction |
-| Connections    | connectionId | —        | userId-index         | expiresAt | Embeds location + drives fan-out via Streams    |
+| Connections    | connectionId | —        | userId-index, geoCell-index | expiresAt | Embeds location + drives fan-out via Streams    |
 | FriendRequests | requestId    | —        | toUserId, fromUserId | —         |                                                |
 
 > **Note:** Friend relationships live in their own `Friendships` table, one item per direction (`userId` → `friendId`). Accepting a friend request creates both items and deletes the request in a single DynamoDB transaction, and removing a friend deletes both items in one, so a friendship is never half-created or half-removed. Keeping friends out of the `Users` item keeps profile reads small and removes any per-user size limit.
 
 The Connections table embeds location data (latitude, longitude, timestamp) alongside connection state. DynamoDB Streams (NEW_AND_OLD_IMAGES) on this table triggers the fanout-handler when location updates occur.
+
+**Finding nearby strangers.** The map is cut into a grid of 0.1° squares (about 7 miles). Every location update also stores the key of the square the connection is in (`geoCell`, e.g. `1106:766`), and the sparse `geoCell-index` is built on it. `GET /nearby-strangers` works out which few squares can contain anyone within the search radius (`src/utils/geo-cells.ts`), queries just those, and then measures the exact Haversine distance. The cost depends on how many people are nearby, not on how many connections exist. If the radius is so large, or the user so close to a pole, that more than 25 squares are needed, it falls back to a scan of the table capped at 20 pages (it logs a warning if it stops early).
 
 ---
 

@@ -14,6 +14,7 @@ import {
   ScanCommandInput,
 } from '@aws-sdk/lib-dynamodb';
 import { ConnectionRecord, UserProfile, FriendRequest } from '../types';
+import { cellOf, cellsAround } from './geo-cells';
 
 const ddbClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(ddbClient, {
@@ -121,11 +122,12 @@ export async function updateConnectionLocation(
   await docClient.send(new UpdateCommand({
     TableName: CONNECTIONS_TABLE,
     Key: { connectionId },
-    UpdateExpression: 'SET latitude = :lat, longitude = :lng, #ts = :ts, expiresAt = :exp',
+    UpdateExpression: 'SET latitude = :lat, longitude = :lng, geoCell = :cell, #ts = :ts, expiresAt = :exp',
     ExpressionAttributeNames: { '#ts': 'timestamp' },
     ExpressionAttributeValues: {
       ':lat': latitude,
       ':lng': longitude,
+      ':cell': cellOf(latitude, longitude),
       ':ts': timestamp,
       ':exp': expiresAt,
     },
@@ -335,4 +337,32 @@ export async function getActiveConnections(): Promise<ConnectionRecord[]> {
     ExpressionAttributeValues: { ':now': now },
   });
   return items as ConnectionRecord[];
+}
+
+/**
+ * The connections that may be within `radiusMiles` of a point: those in the grid squares that can
+ * contain anyone that close. Callers still measure the exact distance. When the area is too wide
+ * for the grid (a huge radius, or a pole), it falls back to the capped scan of all connections.
+ */
+export async function getConnectionsNear(
+  latitude: number,
+  longitude: number,
+  radiusMiles: number
+): Promise<ConnectionRecord[]> {
+  const cells = cellsAround(latitude, longitude, radiusMiles);
+  if (!cells) return getActiveConnections();
+
+  const now = Math.floor(Date.now() / 1000);
+  const perCell = await Promise.all(
+    cells.map((cell) =>
+      queryItems({
+        TableName: CONNECTIONS_TABLE,
+        IndexName: 'geoCell-index',
+        KeyConditionExpression: 'geoCell = :cell',
+        FilterExpression: 'expiresAt > :now',
+        ExpressionAttributeValues: { ':cell': cell, ':now': now },
+      })
+    )
+  );
+  return perCell.flat() as ConnectionRecord[];
 }

@@ -15,7 +15,7 @@ jest.mock('../../src/utils/dynamo-client', () => ({
   getFriendRequest: jest.fn(),
   getFriendRequestsByToUser: jest.fn(),
   deleteFriendRequest: jest.fn(),
-  getActiveConnections: jest.fn(),
+  getConnectionsNear: jest.fn(),
   getConnectionsByUserId: jest.fn(),
 }));
 jest.mock('../../src/utils/config', () => ({ getConfig: jest.fn() }));
@@ -35,8 +35,8 @@ import { ConnectionRecord, UserProfile } from '../../src/types';
 const mockGetFriends = dynamo.getFriends as jest.MockedFunction<typeof dynamo.getFriends>;
 const mockGetUser = dynamo.getUser as jest.MockedFunction<typeof dynamo.getUser>;
 const mockGetConnections = dynamo.getConnectionsByUserId as jest.MockedFunction<typeof dynamo.getConnectionsByUserId>;
-const mockGetActiveConnections = dynamo.getActiveConnections as jest.MockedFunction<
-  typeof dynamo.getActiveConnections
+const mockGetConnectionsNear = dynamo.getConnectionsNear as jest.MockedFunction<
+  typeof dynamo.getConnectionsNear
 >;
 const mockGetConfig = getConfig as jest.MockedFunction<typeof getConfig>;
 const mockDownloadUrl = generateDownloadUrl as jest.MockedFunction<typeof generateDownloadUrl>;
@@ -104,7 +104,7 @@ beforeEach(() => {
   mockGetFriends.mockResolvedValue([]);
   mockGetUser.mockResolvedValue(undefined);
   mockGetConnections.mockResolvedValue([]);
-  mockGetActiveConnections.mockResolvedValue([]);
+  mockGetConnectionsNear.mockResolvedValue([]);
   mockDownloadUrl.mockImplementation(async (key: string) => `https://signed.example/${key}`);
   errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
 });
@@ -337,7 +337,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
 
     expect(resultStatus(result)).toBe(401);
     expect(mockGetConnections).not.toHaveBeenCalled();
-    expect(mockGetActiveConnections).not.toHaveBeenCalled();
+    expect(mockGetConnectionsNear).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -351,7 +351,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
 
     expect(resultStatus(result)).toBe(400);
     expect(resultJson(result)).toEqual(NO_LOCATION);
-    expect(mockGetActiveConnections).not.toHaveBeenCalled();
+    expect(mockGetConnectionsNear).not.toHaveBeenCalled();
   });
 
   describe('with a known location', () => {
@@ -359,8 +359,29 @@ describe('rest-handler: GET /nearby-strangers', () => {
       givenConnections({ 'user-1': [ownConnection()] });
     });
 
+    it('asks only for connections near the caller, within the configured radius', async () => {
+      mockGetConnectionsNear.mockResolvedValue([]);
+
+      await nearbyStrangers();
+      expect(mockGetConnectionsNear).toHaveBeenCalledTimes(1);
+      expect(mockGetConnectionsNear).toHaveBeenLastCalledWith(ORIGIN.lat, ORIGIN.lng, 5);
+
+      mockGetConfig.mockResolvedValue({ ...CONFIG, searchRadiusMiles: 12 });
+      await nearbyStrangers();
+      expect(mockGetConnectionsNear).toHaveBeenLastCalledWith(ORIGIN.lat, ORIGIN.lng, 12);
+    });
+
+    it('measures from the caller\'s own location, not from anyone else\'s', async () => {
+      givenConnections({ 'user-1': [ownConnection({ latitude: lat(0.5), longitude: ORIGIN.lng + 0.5 })] });
+      mockGetConnectionsNear.mockResolvedValue([]);
+
+      await nearbyStrangers();
+
+      expect(mockGetConnectionsNear).toHaveBeenCalledWith(lat(0.5), ORIGIN.lng + 0.5, 5);
+    });
+
     it('returns an empty list when nobody else is around', async () => {
-      mockGetActiveConnections.mockResolvedValue([ownConnection()]);
+      mockGetConnectionsNear.mockResolvedValue([ownConnection()]);
 
       const result = await nearbyStrangers();
 
@@ -369,7 +390,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
     });
 
     it('returns a discoverable stranger with only the fields safe to share', async () => {
-      mockGetActiveConnections.mockResolvedValue([stranger('s1', 0.01)]);
+      mockGetConnectionsNear.mockResolvedValue([stranger('s1', 0.01)]);
       givenUsers({ s1: profile({ userId: 's1', displayName: 'Sam', profilePictureKey: 'pics/sam.jpg' }) });
 
       const result = await nearbyStrangers();
@@ -390,7 +411,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
     // Documents current behaviour: strangers get an empty-string URL when they have no
     // picture, whereas friends omit the field entirely.
     it('uses an empty picture URL for a stranger without a picture', async () => {
-      mockGetActiveConnections.mockResolvedValue([stranger('s1', 0.01)]);
+      mockGetConnectionsNear.mockResolvedValue([stranger('s1', 0.01)]);
       givenUsers({ s1: profile({ userId: 's1' }) });
 
       const [entry] = resultJson(await nearbyStrangers());
@@ -400,7 +421,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
     });
 
     it('excludes the caller\'s own connections', async () => {
-      mockGetActiveConnections.mockResolvedValue([ownConnection(), stranger('s1', 0.01)]);
+      mockGetConnectionsNear.mockResolvedValue([ownConnection(), stranger('s1', 0.01)]);
       givenUsers({ 'user-1': profile({ userId: 'user-1' }), s1: profile({ userId: 's1' }) });
 
       const result = await nearbyStrangers();
@@ -410,7 +431,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
 
     it('excludes the caller\'s friends', async () => {
       mockGetFriends.mockResolvedValue([friendship('f1')]);
-      mockGetActiveConnections.mockResolvedValue([stranger('f1', 0.01), stranger('s1', 0.02)]);
+      mockGetConnectionsNear.mockResolvedValue([stranger('f1', 0.01), stranger('s1', 0.02)]);
       givenUsers({ f1: profile({ userId: 'f1' }), s1: profile({ userId: 's1' }) });
 
       const result = await nearbyStrangers();
@@ -420,7 +441,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
     });
 
     it('excludes users who are not discoverable, or have no profile', async () => {
-      mockGetActiveConnections.mockResolvedValue([
+      mockGetConnectionsNear.mockResolvedValue([
         stranger('hidden', 0.01),
         stranger('ghost', 0.02),
         stranger('s1', 0.03),
@@ -437,7 +458,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
     });
 
     it('excludes strangers outside the radius, or without a location, and never looks them up', async () => {
-      mockGetActiveConnections.mockResolvedValue([
+      mockGetConnectionsNear.mockResolvedValue([
         stranger('out', 0.1),
         stranger('nowhere', 0.01, { latitude: undefined, longitude: undefined }),
         stranger('s1', 0.01),
@@ -452,7 +473,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
     });
 
     it('uses the configured radius', async () => {
-      mockGetActiveConnections.mockResolvedValue([stranger('s1', 0.01)]); // ~0.69 miles
+      mockGetConnectionsNear.mockResolvedValue([stranger('s1', 0.01)]); // ~0.69 miles
       givenUsers({ s1: profile({ userId: 's1' }) });
 
       mockGetConfig.mockResolvedValue({ ...CONFIG, searchRadiusMiles: 0.5 });
@@ -463,7 +484,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
     });
 
     it('lists strangers nearest first', async () => {
-      mockGetActiveConnections.mockResolvedValue([stranger('c', 0.03), stranger('a', 0.01), stranger('b', 0.02)]);
+      mockGetConnectionsNear.mockResolvedValue([stranger('c', 0.03), stranger('a', 0.01), stranger('b', 0.02)]);
       givenUsers({
         a: profile({ userId: 'a' }),
         b: profile({ userId: 'b' }),
@@ -481,7 +502,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
 
     it('caps the list at the configured limit, keeping the nearest', async () => {
       mockGetConfig.mockResolvedValue({ ...CONFIG, nearbyStrangersLimit: 2 });
-      mockGetActiveConnections.mockResolvedValue([
+      mockGetConnectionsNear.mockResolvedValue([
         stranger('s4', 0.04),
         stranger('s2', 0.02),
         stranger('s3', 0.03),
@@ -501,7 +522,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
 
     it('does not let hidden users use up the cap', async () => {
       mockGetConfig.mockResolvedValue({ ...CONFIG, nearbyStrangersLimit: 2 });
-      mockGetActiveConnections.mockResolvedValue([
+      mockGetConnectionsNear.mockResolvedValue([
         stranger('hidden', 0.005),
         stranger('s1', 0.01),
         stranger('s2', 0.02),
@@ -528,7 +549,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
       });
 
       it('is listed once, at the distance of their nearest connection', async () => {
-        mockGetActiveConnections.mockResolvedValue([
+        mockGetConnectionsNear.mockResolvedValue([
           stranger('s1', 0.02, { connectionId: 'laptop' }),
           stranger('s1', 0.01, { connectionId: 'phone' }),
         ]);
@@ -539,7 +560,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
       });
 
       it('does not depend on the order the connections were scanned in', async () => {
-        mockGetActiveConnections.mockResolvedValue([
+        mockGetConnectionsNear.mockResolvedValue([
           stranger('s1', 0.01, { connectionId: 'phone' }),
           stranger('s1', 0.02, { connectionId: 'laptop' }),
         ]);
@@ -550,7 +571,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
       });
 
       it('is listed when any connection is in range, even if the most recent one is far away', async () => {
-        mockGetActiveConnections.mockResolvedValue([
+        mockGetConnectionsNear.mockResolvedValue([
           stranger('s1', 0.01, { connectionId: 'old-near', timestamp: EARLIER }),
           stranger('s1', 0.1, { connectionId: 'new-far', timestamp: LATER }),
         ]);
@@ -561,7 +582,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
       });
 
       it('is left out only when every connection is out of range', async () => {
-        mockGetActiveConnections.mockResolvedValue([
+        mockGetConnectionsNear.mockResolvedValue([
           stranger('s1', 0.1, { connectionId: 'phone' }),
           stranger('s1', 0.2, { connectionId: 'laptop' }),
         ]);
@@ -572,7 +593,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
       });
 
       it('does not depend on timestamps, which may be missing', async () => {
-        mockGetActiveConnections.mockResolvedValue([
+        mockGetConnectionsNear.mockResolvedValue([
           stranger('s1', 0.02, { connectionId: 'timed', timestamp: LATER }),
           stranger('s1', 0.01, { connectionId: 'untimed', timestamp: undefined }),
         ]);
@@ -583,7 +604,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
       });
 
       it('looks the profile up once per user, not once per connection', async () => {
-        mockGetActiveConnections.mockResolvedValue([
+        mockGetConnectionsNear.mockResolvedValue([
           stranger('s1', 0.01, { connectionId: 'phone' }),
           stranger('s1', 0.02, { connectionId: 'laptop' }),
         ]);
@@ -596,7 +617,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
 
       it('does not use up several slots of the cap', async () => {
         mockGetConfig.mockResolvedValue({ ...CONFIG, nearbyStrangersLimit: 2 });
-        mockGetActiveConnections.mockResolvedValue([
+        mockGetConnectionsNear.mockResolvedValue([
           stranger('s1', 0.01, { connectionId: 'phone' }),
           stranger('s1', 0.01, { connectionId: 'laptop' }),
           stranger('s2', 0.02),
@@ -610,7 +631,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
 
       it('is still excluded when they are a friend, whichever connection is nearest', async () => {
         mockGetFriends.mockResolvedValue([friendship('s1')]);
-        mockGetActiveConnections.mockResolvedValue([
+        mockGetConnectionsNear.mockResolvedValue([
           stranger('s1', 0.01, { connectionId: 'phone' }),
           stranger('s1', 0.02, { connectionId: 'laptop' }),
         ]);

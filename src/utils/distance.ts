@@ -1,4 +1,4 @@
-const EARTH_RADIUS_MILES = 3958.8;
+export const EARTH_RADIUS_MILES = 3958.8;
 
 function toRadians(degrees: number): number {
   return degrees * (Math.PI / 180);
