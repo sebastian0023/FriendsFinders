@@ -2,8 +2,9 @@ import { APIGatewayProxyEventV2, APIGatewayProxyResultV2 } from 'aws-lambda';
 import { v4 as uuidv4 } from 'uuid';
 import {
   getFriends,
-  putFriendship,
-  deleteFriendship,
+  areFriends,
+  createFriendship,
+  removeFriendship,
   getFriendCount,
   getUser,
   putUser,
@@ -150,8 +151,7 @@ async function handleRemoveFriend(event: APIGatewayProxyEventV2): Promise<APIGat
   const friendId = extractPathParam(event.rawPath, /^\/friends\/([^/]+)$/);
   if (!friendId) return response(400, { error: 'Missing friendId' });
 
-  await deleteFriendship(userId, friendId);
-  await deleteFriendship(friendId, userId);
+  await removeFriendship(userId, friendId);
 
   return response(200, { message: 'Friend removed' });
 }
@@ -169,9 +169,7 @@ async function handleCreateFriendRequest(event: APIGatewayProxyEventV2): Promise
   }
 
   // Check if already friends
-  const friends = await getFriends(fromUserId);
-  const alreadyFriends = friends.some(f => f.friendId === toUserId);
-  if (alreadyFriends) {
+  if (await areFriends(fromUserId, toUserId)) {
     return response(409, { error: 'Already friends' });
   }
 
@@ -241,12 +239,9 @@ async function handleAcceptFriendRequest(event: APIGatewayProxyEventV2): Promise
     return response(409, { error: 'Friend limit reached' });
   }
 
-  // Create bidirectional friendship
-  await putFriendship(userId, request.fromUserId);
-  await putFriendship(request.fromUserId, userId);
-
-  // Delete the request
-  await deleteFriendRequest(requestId);
+  // Creates the friendship in both directions and consumes the request, all in one transaction
+  const outcome = await createFriendship(userId, request.fromUserId, requestId);
+  if (outcome === 'request_not_found') return response(409, { error: 'Request is not pending' });
 
   return response(200, { message: 'Friend request accepted' });
 }

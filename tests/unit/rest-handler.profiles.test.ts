@@ -4,8 +4,9 @@ import { restEvent, resultStatus, resultJson } from '../helpers/rest-events';
 // Factories keep the real modules (and their AWS SDK clients) from loading at all.
 jest.mock('../../src/utils/dynamo-client', () => ({
   getFriends: jest.fn(),
-  putFriendship: jest.fn(),
-  deleteFriendship: jest.fn(),
+  createFriendship: jest.fn(),
+  removeFriendship: jest.fn(),
+  areFriends: jest.fn(),
   getFriendCount: jest.fn(),
   getUser: jest.fn(),
   putUser: jest.fn(),
@@ -113,14 +114,14 @@ describe('rest-handler: GET /users/{userId}/profile', () => {
     expect(mockDownloadUrl).not.toHaveBeenCalled();
   });
 
-  it('does not leak the friend list or the raw storage key', async () => {
-    mockGetUser.mockResolvedValue(
-      user({
-        profilePictureKey: 'pics/two.jpg',
-        friendIds: ['user-3', 'user-4'],
-        friendshipDates: { 'user-3': '2026-02-02T00:00:00.000Z' },
-      })
-    );
+  it('does not leak other stored attributes or the raw storage key', async () => {
+    // Whatever else is stored on the item (old friend lists, internal fields) must not be exposed.
+    mockGetUser.mockResolvedValue({
+      ...user({ profilePictureKey: 'pics/two.jpg' }),
+      friendIds: ['user-3', 'user-4'],
+      friendshipDates: { 'user-3': '2026-02-02T00:00:00.000Z' },
+      internalNote: 'staff only',
+    } as unknown as UserProfile);
 
     const body = resultJson(await getProfile());
 
