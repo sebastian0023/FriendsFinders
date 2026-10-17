@@ -15,7 +15,7 @@ jest.mock('../../src/utils/dynamo-client', () => ({
   getFriendRequest: jest.fn(),
   getFriendRequestsByToUser: jest.fn(),
   deleteFriendRequest: jest.fn(),
-  getActiveConnections: jest.fn(),
+  getConnectionsNear: jest.fn(),
   getConnectionsByUserId: jest.fn(),
 }));
 jest.mock('../../src/utils/config', () => ({ getConfig: jest.fn() }));

@@ -10,6 +10,7 @@ import {
   TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import * as db from '../../src/utils/dynamo-client';
+import { cellsAround } from '../../src/utils/geo-cells';
 import { ConnectionRecord, FriendRequest, UserProfile } from '../../src/types';
 
 // The wrapper sends every request through a DynamoDBDocumentClient, so mocking that class
@@ -148,21 +149,31 @@ describe('dynamo-client: connections', () => {
     expect(await db.getConnectionsByUserId('nobody')).toEqual([]);
   });
 
-  it('updateConnectionLocation sets the location, timestamp and TTL (timestamp is a reserved word)', async () => {
+  it('updateConnectionLocation sets the location, its grid cell, timestamp and TTL (timestamp is a reserved word)', async () => {
     await db.updateConnectionLocation('conn-1', 20.5, -103.5, '2026-10-16T12:30:00.000Z', 1_800_000_600);
 
     expect(inputOf(ddb.commandCalls(UpdateCommand))).toEqual({
       TableName: 'Connections',
       Key: { connectionId: 'conn-1' },
-      UpdateExpression: 'SET latitude = :lat, longitude = :lng, #ts = :ts, expiresAt = :exp',
+      UpdateExpression: 'SET latitude = :lat, longitude = :lng, geoCell = :cell, #ts = :ts, expiresAt = :exp',
       ExpressionAttributeNames: { '#ts': 'timestamp' },
       ExpressionAttributeValues: {
         ':lat': 20.5,
         ':lng': -103.5,
+        ':cell': '1105:765',
         ':ts': '2026-10-16T12:30:00.000Z',
         ':exp': 1_800_000_600,
       },
     });
+  });
+
+  // The cell key is what the geoCell-index is built on, so it must follow the connection when it moves.
+  it('updateConnectionLocation moves the connection to the cell of its new location', async () => {
+    await db.updateConnectionLocation('conn-1', 20.5, -103.5, 't1', 1);
+    await db.updateConnectionLocation('conn-1', 21.5, -102.5, 't2', 2);
+
+    const cells = ddb.commandCalls(UpdateCommand).map((call) => (call.args[0].input as any).ExpressionAttributeValues[':cell']);
+    expect(cells).toEqual(['1105:765', '1115:775']);
   });
 
   it('getConnectionsByUserId follows LastEvaluatedKey, so no connection is missed', async () => {
@@ -279,6 +290,108 @@ describe('dynamo-client: active connections (scan)', () => {
       expect(result).toHaveLength(20);
       expect(warn).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('dynamo-client: connections near a point', () => {
+  const GDL = { lat: 20.6597, lng: -103.3496 };
+  const cellFrom = (call: { args: [{ input: unknown }] }) => (call.args[0].input as any).ExpressionAttributeValues[':cell'];
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  it('queries every covering cell on the geoCell-index, and nothing else', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(1_800_000_123_456);
+    ddb.on(QueryCommand).resolves({ Items: [] });
+
+    await db.getConnectionsNear(GDL.lat, GDL.lng, 5);
+
+    const calls = ddb.commandCalls(QueryCommand);
+    const expected = cellsAround(GDL.lat, GDL.lng, 5) as string[];
+    expect(calls).toHaveLength(expected.length);
+    expect(calls.map(cellFrom).sort()).toEqual([...expected].sort());
+    for (const call of calls) {
+      expect(call.args[0].input).toMatchObject({
+        TableName: 'Connections',
+        IndexName: 'geoCell-index',
+        KeyConditionExpression: 'geoCell = :cell',
+        FilterExpression: 'expiresAt > :now',
+      });
+      expect((call.args[0].input as any).ExpressionAttributeValues[':now']).toBe(1_800_000_123); // whole seconds
+    }
+    expect(ddb.commandCalls(ScanCommand)).toHaveLength(0);
+  });
+
+  it('returns the connections of all the cells together', async () => {
+    ddb.on(QueryCommand).callsFake(async (input: any) => ({
+      Items: [connection({ connectionId: `in-${input.ExpressionAttributeValues[':cell']}` })],
+    }));
+
+    const result = await db.getConnectionsNear(GDL.lat, GDL.lng, 5);
+
+    const expected = (cellsAround(GDL.lat, GDL.lng, 5) as string[]).map((cell) => `in-${cell}`);
+    expect(result.map((c) => c.connectionId).sort()).toEqual([...expected].sort());
+  });
+
+  it('returns an empty list when nobody is near', async () => {
+    ddb.on(QueryCommand).resolves({});
+    expect(await db.getConnectionsNear(GDL.lat, GDL.lng, 5)).toEqual([]);
+  });
+
+  it('follows LastEvaluatedKey within a cell', async () => {
+    const cells = cellsAround(GDL.lat, GDL.lng, 5) as string[];
+    const busy = cells[0];
+    ddb.on(QueryCommand).callsFake(async (input: any) => {
+      if (input.ExpressionAttributeValues[':cell'] !== busy) return { Items: [] };
+      return input.ExclusiveStartKey
+        ? { Items: [connection({ connectionId: 'page-2' })] }
+        : { Items: [connection({ connectionId: 'page-1' })], LastEvaluatedKey: { connectionId: 'page-1' } };
+    });
+
+    const result = await db.getConnectionsNear(GDL.lat, GDL.lng, 5);
+
+    expect(result.map((c) => c.connectionId).sort()).toEqual(['page-1', 'page-2']);
+    expect(ddb.commandCalls(QueryCommand)).toHaveLength(cells.length + 1);
+  });
+
+  it('uses the same time for every cell', async () => {
+    jest.spyOn(Date, 'now').mockReturnValueOnce(1_800_000_000_000).mockReturnValue(1_900_000_000_000);
+    ddb.on(QueryCommand).resolves({ Items: [] });
+
+    await db.getConnectionsNear(GDL.lat, GDL.lng, 5);
+
+    for (const call of ddb.commandCalls(QueryCommand)) {
+      expect((call.args[0].input as any).ExpressionAttributeValues[':now']).toBe(1_800_000_000);
+    }
+  });
+
+  describe('when the radius is too wide for the index', () => {
+    it('falls back to the capped scan of all active connections', async () => {
+      ddb.on(ScanCommand).resolves({ Items: [connection({ connectionId: 'from-scan' })] });
+
+      const result = await db.getConnectionsNear(GDL.lat, GDL.lng, 1000);
+
+      expect(result.map((c) => c.connectionId)).toEqual(['from-scan']);
+      expect(ddb.commandCalls(ScanCommand)).toHaveLength(1);
+      expect(ddb.commandCalls(QueryCommand)).toHaveLength(0);
+    });
+
+    it('falls back near a pole, where every longitude is in range', async () => {
+      ddb.on(ScanCommand).resolves({ Items: [] });
+
+      await db.getConnectionsNear(89.99, 10, 5);
+
+      expect(ddb.commandCalls(ScanCommand)).toHaveLength(1);
+      expect(ddb.commandCalls(QueryCommand)).toHaveLength(0);
+    });
+  });
+
+  it('lets DynamoDB errors reach the caller', async () => {
+    const failure = new Error('ProvisionedThroughputExceededException');
+    ddb.on(QueryCommand).rejects(failure);
+
+    await expect(db.getConnectionsNear(GDL.lat, GDL.lng, 5)).rejects.toBe(failure);
   });
 });
 

@@ -13,7 +13,7 @@ import {
   getFriendRequest,
   getFriendRequestsByToUser,
   deleteFriendRequest,
-  getActiveConnections,
+  getConnectionsNear,
   getConnectionsByUserId,
 } from '../utils/dynamo-client';
 import { getConfig } from '../utils/config';
@@ -418,8 +418,8 @@ async function handleNearbyStrangers(event: APIGatewayProxyEventV2): Promise<API
   const userLat = activeUserConn.latitude;
   const userLng = activeUserConn.longitude;
 
-  // Get all active connections
-  const allConnections = await getActiveConnections();
+  // Only the connections that can be within the search radius, not the whole table
+  const allConnections = await getConnectionsNear(userLat, userLng, config.searchRadiusMiles);
 
   // Get user's friends to exclude them
   const friends = await getFriends(userId);
