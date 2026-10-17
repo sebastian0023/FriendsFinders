@@ -5,8 +5,9 @@ import { restEvent, resultJson } from '../helpers/rest-events';
 // Same module replacements as the other REST handler tests: no AWS client is ever created.
 jest.mock('../../src/utils/dynamo-client', () => ({
   getFriends: jest.fn(),
-  putFriendship: jest.fn(),
-  deleteFriendship: jest.fn(),
+  createFriendship: jest.fn(),
+  removeFriendship: jest.fn(),
+  areFriends: jest.fn(),
   getFriendCount: jest.fn(),
   getUser: jest.fn(),
   putUser: jest.fn(),

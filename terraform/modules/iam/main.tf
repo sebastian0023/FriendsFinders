@@ -120,13 +120,14 @@ data "aws_iam_policy_document" "rest_handler" {
   }
 
   # Reads friendships and creates or removes them. A transaction is authorised through the
-  # individual PutItem and DeleteItem permissions, so no separate transaction action is needed.
+  # permissions of its individual operations (UpdateItem to create, DeleteItem to remove), so no
+  # separate transaction action is needed.
   statement {
     sid = "FriendshipsAccess"
     actions = [
       "dynamodb:GetItem",
       "dynamodb:Query",
-      "dynamodb:PutItem",
+      "dynamodb:UpdateItem",
       "dynamodb:DeleteItem",
     ]
     resources = [

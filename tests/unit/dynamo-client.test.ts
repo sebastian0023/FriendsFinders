@@ -8,6 +8,7 @@ import {
   UpdateCommand,
   ScanCommand,
   BatchGetCommand,
+  TransactWriteCommand,
 } from '@aws-sdk/lib-dynamodb';
 import * as db from '../../src/utils/dynamo-client';
 import { ConnectionRecord, FriendRequest, UserProfile } from '../../src/types';
@@ -55,14 +56,16 @@ afterAll(() => {
 // ── Table names ───────────────────────────────────────────────────────────────
 
 describe('dynamo-client: table names', () => {
-  it('defaults to Connections, Users and FriendRequests', async () => {
+  it('defaults to Connections, Users, FriendRequests and Friendships', async () => {
     await db.getConnection('c');
     await db.getUser('u');
     await db.getFriendRequest('r');
+    await db.areFriends('a', 'b');
 
     expect(inputOf(ddb.commandCalls(GetCommand), 0)).toMatchObject({ TableName: 'Connections' });
     expect(inputOf(ddb.commandCalls(GetCommand), 1)).toMatchObject({ TableName: 'Users' });
     expect(inputOf(ddb.commandCalls(GetCommand), 2)).toMatchObject({ TableName: 'FriendRequests' });
+    expect(inputOf(ddb.commandCalls(GetCommand), 3)).toMatchObject({ TableName: 'Friendships' });
   });
 
   it('takes the names from the environment when set', async () => {
@@ -70,6 +73,7 @@ describe('dynamo-client: table names', () => {
     process.env.CONNECTIONS_TABLE_NAME = 'prod-connections';
     process.env.USERS_TABLE_NAME = 'prod-users';
     process.env.FRIEND_REQUESTS_TABLE_NAME = 'prod-requests';
+    process.env.FRIENDSHIPS_TABLE_NAME = 'prod-friendships';
 
     try {
       let tablesUsed!: () => Promise<string[]>;
@@ -82,13 +86,18 @@ describe('dynamo-client: table names', () => {
         const isolated = require('../../src/utils/dynamo-client');
 
         tablesUsed = async () => {
-          await Promise.all([isolated.getConnection('c'), isolated.getUser('u'), isolated.getFriendRequest('r')]);
+          await Promise.all([
+            isolated.getConnection('c'),
+            isolated.getUser('u'),
+            isolated.getFriendRequest('r'),
+            isolated.areFriends('a', 'b'),
+          ]);
           return isolatedMock.commandCalls(sdk.GetCommand).map((call: any) => call.args[0].input.TableName);
         };
       });
 
       // Awaited outside isolateModules, which does not wait for promises itself.
-      expect(await tablesUsed()).toEqual(['prod-connections', 'prod-users', 'prod-requests']);
+      expect(await tablesUsed()).toEqual(['prod-connections', 'prod-users', 'prod-requests', 'prod-friendships']);
     } finally {
       process.env = saved;
     }
@@ -264,29 +273,22 @@ describe('dynamo-client: users', () => {
   });
 
   describe('putUser', () => {
-    it('defaults the friend list and dates to empty', async () => {
-      await db.putUser(profile());
+    it('stores the profile as given', async () => {
+      await db.putUser(profile({ profilePictureKey: 'k' }));
 
       expect(inputOf(ddb.commandCalls(PutCommand))).toEqual({
         TableName: 'Users',
-        Item: { ...profile(), friendIds: [], friendshipDates: {} },
+        Item: profile({ profilePictureKey: 'k' }),
       });
     });
 
-    it('keeps a friend list and dates that are provided', async () => {
-      const withFriends = profile({ friendIds: ['a'], friendshipDates: { a: '2026-02-02T00:00:00.000Z' } });
+    // Friendships live in their own table, so a profile write can never touch a user's friends.
+    it('writes no friend data into the profile', async () => {
+      await db.putUser(profile());
 
-      await db.putUser(withFriends);
-
-      expect((inputOf(ddb.commandCalls(PutCommand)) as any).Item).toEqual(withFriends);
-    });
-
-    // Documents current behaviour: the write replaces the whole item, so calling putUser for an
-    // existing user whose profile object lacks friendIds would wipe their friends. The REST
-    // handler only calls it when the user does not exist yet.
-    it('replaces the whole item, resetting friends when the profile has none', async () => {
-      await db.putUser(profile({ friendIds: undefined }));
-      expect((inputOf(ddb.commandCalls(PutCommand)) as any).Item.friendIds).toEqual([]);
+      const item = (inputOf(ddb.commandCalls(PutCommand)) as any).Item;
+      expect(item).not.toHaveProperty('friendIds');
+      expect(item).not.toHaveProperty('friendshipDates');
     });
   });
 
@@ -335,25 +337,35 @@ describe('dynamo-client: users', () => {
   });
 });
 
-// ── Friendships (stored on the Users item) ────────────────────────────────────
+// ── Friendships (one item per direction, in their own table) ──────────────────
+
+const cancelled = (...codes: string[]) =>
+  Object.assign(new Error('Transaction cancelled'), {
+    name: 'TransactionCanceledException',
+    CancellationReasons: codes.map((Code) => ({ Code })),
+  });
 
 describe('dynamo-client: friendships', () => {
-  const given = (user: UserProfile | undefined) => ddb.on(GetCommand).resolves({ Item: user });
-
   describe('getFriends', () => {
-    it('returns an empty list for an unknown user or one without friends', async () => {
-      given(undefined);
-      expect(await db.getFriends('user-1')).toEqual([]);
+    it('queries the friendships of the user', async () => {
+      ddb.on(QueryCommand).resolves({ Items: [] });
 
-      given(profile({ friendIds: undefined }));
-      expect(await db.getFriends('user-1')).toEqual([]);
+      await db.getFriends('user-1');
 
-      given(profile({ friendIds: [] }));
-      expect(await db.getFriends('user-1')).toEqual([]);
+      expect(inputOf(ddb.commandCalls(QueryCommand))).toEqual({
+        TableName: 'Friendships',
+        KeyConditionExpression: 'userId = :uid',
+        ExpressionAttributeValues: { ':uid': 'user-1' },
+      });
     });
 
-    it('maps each friend id with the date they became friends', async () => {
-      given(profile({ friendIds: ['a', 'b'], friendshipDates: { a: '2026-02-02T00:00:00.000Z', b: '2026-03-03T00:00:00.000Z' } }));
+    it('returns each friend with the date they became friends', async () => {
+      ddb.on(QueryCommand).resolves({
+        Items: [
+          { userId: 'user-1', friendId: 'a', createdAt: '2026-02-02T00:00:00.000Z' },
+          { userId: 'user-1', friendId: 'b', createdAt: '2026-03-03T00:00:00.000Z' },
+        ],
+      });
 
       expect(await db.getFriends('user-1')).toEqual([
         { userId: 'user-1', friendId: 'a', createdAt: '2026-02-02T00:00:00.000Z' },
@@ -361,120 +373,216 @@ describe('dynamo-client: friendships', () => {
       ]);
     });
 
-    it('falls back to the profile creation date when a friendship date is missing', async () => {
-      given(profile({ friendIds: ['a'], friendshipDates: undefined }));
+    it.each([
+      ['no items', { Items: [] }],
+      ['no Items field', {}],
+    ])('returns an empty list for %s', async (_name, response) => {
+      ddb.on(QueryCommand).resolves(response);
+      expect(await db.getFriends('user-1')).toEqual([]);
+    });
 
-      expect(await db.getFriends('user-1')).toEqual([
-        { userId: 'user-1', friendId: 'a', createdAt: '2026-01-01T00:00:00.000Z' },
-      ]);
+    it('follows LastEvaluatedKey, so friends beyond the first page are not lost', async () => {
+      const row = (friendId: string) => ({ userId: 'user-1', friendId, createdAt: 'd' });
+      ddb
+        .on(QueryCommand)
+        .resolvesOnce({ Items: [row('a'), row('b')], LastEvaluatedKey: { userId: 'user-1', friendId: 'b' } })
+        .resolvesOnce({ Items: [row('c')], LastEvaluatedKey: { userId: 'user-1', friendId: 'c' } })
+        .resolvesOnce({ Items: [row('d')] });
+
+      const friends = await db.getFriends('user-1');
+
+      expect(friends.map((f) => f.friendId)).toEqual(['a', 'b', 'c', 'd']);
+      const calls = ddb.commandCalls(QueryCommand);
+      expect(calls).toHaveLength(3);
+      expect((inputOf(calls, 0) as any).ExclusiveStartKey).toBeUndefined();
+      expect((inputOf(calls, 1) as any).ExclusiveStartKey).toEqual({ userId: 'user-1', friendId: 'b' });
+      expect((inputOf(calls, 2) as any).ExclusiveStartKey).toEqual({ userId: 'user-1', friendId: 'c' });
     });
   });
 
   describe('getFriendCount', () => {
-    it('counts the friends, and is 0 for an unknown user or an empty list', async () => {
-      given(profile({ friendIds: ['a', 'b', 'c'] }));
+    it('asks DynamoDB only for the count', async () => {
+      ddb.on(QueryCommand).resolves({ Count: 3 });
+
       expect(await db.getFriendCount('user-1')).toBe(3);
+      expect(inputOf(ddb.commandCalls(QueryCommand))).toEqual({
+        TableName: 'Friendships',
+        KeyConditionExpression: 'userId = :uid',
+        ExpressionAttributeValues: { ':uid': 'user-1' },
+        Select: 'COUNT',
+      });
+    });
 
-      given(undefined);
+    it('is 0 when there are no friends', async () => {
+      ddb.on(QueryCommand).resolves({});
       expect(await db.getFriendCount('user-1')).toBe(0);
+    });
 
-      given(profile({ friendIds: undefined }));
-      expect(await db.getFriendCount('user-1')).toBe(0);
+    it('adds up the counts of every page', async () => {
+      ddb
+        .on(QueryCommand)
+        .resolvesOnce({ Count: 1000, LastEvaluatedKey: { userId: 'user-1', friendId: 'x' } })
+        .resolvesOnce({ Count: 234 });
+
+      expect(await db.getFriendCount('user-1')).toBe(1234);
+      expect(ddb.commandCalls(QueryCommand)).toHaveLength(2);
+      expect((inputOf(ddb.commandCalls(QueryCommand), 1) as any).ExclusiveStartKey).toEqual({
+        userId: 'user-1',
+        friendId: 'x',
+      });
     });
   });
 
-  describe('putFriendship', () => {
-    it('adds the friend and records when it happened', async () => {
-      given(profile({ friendIds: ['a'], friendshipDates: { a: '2026-02-02T00:00:00.000Z' } }));
+  describe('areFriends', () => {
+    it('looks up the single friendship item', async () => {
+      ddb.on(GetCommand).resolves({ Item: { userId: 'user-1', friendId: 'user-2', createdAt: 'd' } });
 
-      await db.putFriendship('user-1', 'b');
-
-      const input = inputOf(ddb.commandCalls(UpdateCommand)) as any;
-      expect(input).toMatchObject({
-        TableName: 'Users',
-        Key: { userId: 'user-1' },
-        UpdateExpression: 'SET friendIds = :fids, friendshipDates = :fdates',
+      expect(await db.areFriends('user-1', 'user-2')).toBe(true);
+      expect(inputOf(ddb.commandCalls(GetCommand))).toEqual({
+        TableName: 'Friendships',
+        Key: { userId: 'user-1', friendId: 'user-2' },
       });
-      expect(input.ExpressionAttributeValues[':fids']).toEqual(['a', 'b']);
-      expect(Object.keys(input.ExpressionAttributeValues[':fdates']).sort()).toEqual(['a', 'b']);
-      expect(input.ExpressionAttributeValues[':fdates'].a).toBe('2026-02-02T00:00:00.000Z');
-      expect(input.ExpressionAttributeValues[':fdates'].b).toMatch(ISO);
     });
 
-    it('starts a new list for a user without friends', async () => {
-      given(profile({ friendIds: undefined, friendshipDates: undefined }));
-
-      await db.putFriendship('user-1', 'a');
-
-      expect((inputOf(ddb.commandCalls(UpdateCommand)) as any).ExpressionAttributeValues[':fids']).toEqual(['a']);
-    });
-
-    it('is idempotent: an existing friend causes no write', async () => {
-      given(profile({ friendIds: ['a'], friendshipDates: { a: '2026-02-02T00:00:00.000Z' } }));
-
-      await db.putFriendship('user-1', 'a');
-
-      expect(ddb.commandCalls(UpdateCommand)).toHaveLength(0);
-    });
-
-    // Documents a known gap: the whole list is read, changed in memory and written back
-    // (SET friendIds = :fids), not added atomically. Two accepts for the same user at the
-    // same time can overwrite each other and lose a friend. It is also stored as a list,
-    // while AGENTS.md describes a string set.
-    it('writes back the whole list it read, so a concurrent add could be lost', async () => {
-      given(profile({ friendIds: ['a'] }));
-
-      await db.putFriendship('user-1', 'b');
-
-      const input = inputOf(ddb.commandCalls(UpdateCommand)) as any;
-      expect(input.UpdateExpression).toBe('SET friendIds = :fids, friendshipDates = :fdates');
-      expect(input.UpdateExpression).not.toMatch(/ADD|list_append/);
-      expect(Array.isArray(input.ExpressionAttributeValues[':fids'])).toBe(true);
+    it('is false when there is no such item', async () => {
+      ddb.on(GetCommand).resolves({});
+      expect(await db.areFriends('user-1', 'user-2')).toBe(false);
     });
   });
 
-  describe('deleteFriendship', () => {
-    it('removes the friend and their date, keeping the others', async () => {
-      given(profile({ friendIds: ['a', 'b'], friendshipDates: { a: 'date-a', b: 'date-b' } }));
+  describe('createFriendship', () => {
+    const create = () => db.createFriendship('user-1', 'user-2', 'req-1');
 
-      await db.deleteFriendship('user-1', 'a');
+    it('writes both directions and deletes the request in one transaction', async () => {
+      await create();
 
-      expect(inputOf(ddb.commandCalls(UpdateCommand))).toEqual({
-        TableName: 'Users',
-        Key: { userId: 'user-1' },
-        UpdateExpression: 'SET friendIds = :fids, friendshipDates = :fdates',
-        ExpressionAttributeValues: { ':fids': ['b'], ':fdates': { b: 'date-b' } },
+      expect(ddb.commandCalls(TransactWriteCommand)).toHaveLength(1);
+      const items = (inputOf(ddb.commandCalls(TransactWriteCommand)) as any).TransactItems;
+      expect(items).toHaveLength(3);
+
+      expect(items[0].Update).toMatchObject({
+        TableName: 'Friendships',
+        Key: { userId: 'user-1', friendId: 'user-2' },
+        UpdateExpression: 'SET createdAt = if_not_exists(createdAt, :now)',
       });
+      expect(items[1].Update).toMatchObject({
+        TableName: 'Friendships',
+        Key: { userId: 'user-2', friendId: 'user-1' },
+        UpdateExpression: 'SET createdAt = if_not_exists(createdAt, :now)',
+      });
+      expect(items[2].Delete).toEqual({
+        TableName: 'FriendRequests',
+        Key: { requestId: 'req-1' },
+        ConditionExpression: 'attribute_exists(requestId)',
+      });
+    });
+
+    it('stamps both directions with the same date, and keeps an existing one', async () => {
+      await create();
+
+      const [first, second] = (inputOf(ddb.commandCalls(TransactWriteCommand)) as any).TransactItems;
+      expect(first.Update.ExpressionAttributeValues[':now']).toMatch(ISO);
+      expect(second.Update.ExpressionAttributeValues[':now']).toBe(first.Update.ExpressionAttributeValues[':now']);
+      // if_not_exists makes repeating the call harmless: the original date is never overwritten
+      expect(first.Update.UpdateExpression).toContain('if_not_exists(createdAt');
+    });
+
+    it('reports success', async () => {
+      await expect(create()).resolves.toBe('created');
+    });
+
+    it('reports request_not_found when the request no longer exists', async () => {
+      ddb.on(TransactWriteCommand).rejects(cancelled('None', 'None', 'ConditionalCheckFailed'));
+
+      await expect(create()).resolves.toBe('request_not_found');
+      expect(ddb.commandCalls(TransactWriteCommand)).toHaveLength(1); // not retried
     });
 
     it.each([
-      ['an unknown user', undefined],
-      ['a user without a friend list', profile({ friendIds: undefined })],
-    ])('writes nothing for %s', async (_name, user) => {
-      given(user);
+      ['a validation problem', cancelled('ValidationError', 'None', 'None')],
+      ['throttling', cancelled('ThrottlingError', 'None', 'None')],
+      ['a cancellation that lists no reasons', Object.assign(new Error('x'), { name: 'TransactionCanceledException' })],
+      [
+        'an error that carries reasons but is not a cancellation',
+        Object.assign(new Error('x'), {
+          name: 'SomethingElse',
+          CancellationReasons: [{ Code: 'None' }, { Code: 'None' }, { Code: 'ConditionalCheckFailed' }],
+        }),
+      ],
+      ['an error that is not a cancellation', Object.assign(new Error('boom'), { name: 'InternalServerError' })],
+    ])('rethrows %s without retrying', async (_name, failure) => {
+      ddb.on(TransactWriteCommand).rejects(failure);
 
-      await db.deleteFriendship('user-1', 'a');
-
-      expect(ddb.commandCalls(UpdateCommand)).toHaveLength(0);
+      await expect(create()).rejects.toBe(failure);
+      expect(ddb.commandCalls(TransactWriteCommand)).toHaveLength(1);
     });
 
-    it('copes with a friend list that has no dates recorded', async () => {
-      given(profile({ friendIds: ['a', 'b'], friendshipDates: undefined }));
+    it('retries when another transaction is touching the same items', async () => {
+      ddb
+        .on(TransactWriteCommand)
+        .rejectsOnce(cancelled('TransactionConflict', 'None', 'None'))
+        .resolves({});
 
-      await db.deleteFriendship('user-1', 'a');
-
-      const values = (inputOf(ddb.commandCalls(UpdateCommand)) as any).ExpressionAttributeValues;
-      expect(values).toEqual({ ':fids': ['b'], ':fdates': {} });
+      await expect(create()).resolves.toBe('created');
+      expect(ddb.commandCalls(TransactWriteCommand)).toHaveLength(2);
     });
 
-    // Documents current behaviour: removing someone who is not a friend still rewrites the
-    // unchanged list.
-    it('rewrites the unchanged list when the person was not a friend', async () => {
-      given(profile({ friendIds: ['a'], friendshipDates: { a: 'date-a' } }));
+    it('gives up after three conflicting attempts', async () => {
+      const conflict = cancelled('None', 'TransactionConflict', 'None');
+      ddb.on(TransactWriteCommand).rejects(conflict);
 
-      await db.deleteFriendship('user-1', 'zzz');
+      await expect(create()).rejects.toBe(conflict);
+      expect(ddb.commandCalls(TransactWriteCommand)).toHaveLength(3);
+    });
 
-      expect((inputOf(ddb.commandCalls(UpdateCommand)) as any).ExpressionAttributeValues[':fids']).toEqual(['a']);
+    it('does not report request_not_found for a conflict on the request item', async () => {
+      ddb.on(TransactWriteCommand).rejectsOnce(cancelled('None', 'None', 'TransactionConflict')).resolves({});
+
+      await expect(create()).resolves.toBe('created');
+    });
+  });
+
+  describe('removeFriendship', () => {
+    const remove = () => db.removeFriendship('user-1', 'user-2');
+
+    it('deletes both directions in one transaction', async () => {
+      await remove();
+
+      expect(ddb.commandCalls(TransactWriteCommand)).toHaveLength(1);
+      expect((inputOf(ddb.commandCalls(TransactWriteCommand)) as any).TransactItems).toEqual([
+        { Delete: { TableName: 'Friendships', Key: { userId: 'user-1', friendId: 'user-2' } } },
+        { Delete: { TableName: 'Friendships', Key: { userId: 'user-2', friendId: 'user-1' } } },
+      ]);
+    });
+
+    it('is harmless to repeat, because the deletes have no condition', async () => {
+      await remove();
+
+      const items = (inputOf(ddb.commandCalls(TransactWriteCommand)) as any).TransactItems;
+      for (const item of items) expect(item.Delete).not.toHaveProperty('ConditionExpression');
+    });
+
+    it('retries on a transaction conflict and then succeeds', async () => {
+      ddb.on(TransactWriteCommand).rejectsOnce(cancelled('TransactionConflict', 'None')).resolves({});
+
+      await expect(remove()).resolves.toBeUndefined();
+      expect(ddb.commandCalls(TransactWriteCommand)).toHaveLength(2);
+    });
+
+    it('gives up after three conflicting attempts', async () => {
+      const conflict = cancelled('TransactionConflict', 'TransactionConflict');
+      ddb.on(TransactWriteCommand).rejects(conflict);
+
+      await expect(remove()).rejects.toBe(conflict);
+      expect(ddb.commandCalls(TransactWriteCommand)).toHaveLength(3);
+    });
+
+    it('rethrows any other failure without retrying', async () => {
+      const failure = new Error('boom');
+      ddb.on(TransactWriteCommand).rejects(failure);
+
+      await expect(remove()).rejects.toBe(failure);
+      expect(ddb.commandCalls(TransactWriteCommand)).toHaveLength(1);
     });
   });
 });
@@ -542,12 +650,4 @@ describe('dynamo-client: errors', () => {
     await expect(db.updateUser('user-1', { displayName: 'x' })).rejects.toBe(failure);
   });
 
-  it('does not write when the read that precedes it fails', async () => {
-    ddb.on(GetCommand).rejects(new Error('boom'));
-
-    await expect(db.putFriendship('user-1', 'a')).rejects.toThrow('boom');
-    await expect(db.deleteFriendship('user-1', 'a')).rejects.toThrow('boom');
-
-    expect(ddb.commandCalls(UpdateCommand)).toHaveLength(0);
-  });
 });

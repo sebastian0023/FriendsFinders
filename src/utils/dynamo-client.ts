@@ -8,6 +8,8 @@ import {
   UpdateCommand,
   ScanCommand,
   BatchGetCommand,
+  TransactWriteCommand,
+  TransactWriteCommandInput,
 } from '@aws-sdk/lib-dynamodb';
 import { ConnectionRecord, UserProfile, FriendRequest } from '../types';
 
@@ -19,6 +21,7 @@ const docClient = DynamoDBDocumentClient.from(ddbClient, {
 const CONNECTIONS_TABLE = process.env.CONNECTIONS_TABLE_NAME || 'Connections';
 const USERS_TABLE = process.env.USERS_TABLE_NAME || 'Users';
 const FRIEND_REQUESTS_TABLE = process.env.FRIEND_REQUESTS_TABLE_NAME || 'FriendRequests';
+const FRIENDSHIPS_TABLE = process.env.FRIENDSHIPS_TABLE_NAME || 'Friendships';
 
 // --- Connections Table ---
 
@@ -75,66 +78,131 @@ export async function updateConnectionLocation(
   }));
 }
 
-// --- Friendships (now stored in Users table) ---
+// --- Friendships ---
+//
+// One item per direction: (userId, friendId) means "friendId is a friend of userId". A friendship
+// is therefore two items, one for each user, and is always created and removed together in a
+// transaction. Friends live in their own table so a profile read never drags a friend list along.
 
 export async function getFriends(userId: string): Promise<{ userId: string; friendId: string; createdAt: string }[]> {
-  const user = await getUser(userId);
-  if (!user || !user.friendIds || user.friendIds.length === 0) {
-    return [];
-  }
-  
-  // Convert friendIds array to the expected format
-  return user.friendIds.map(friendId => ({
-    userId,
-    friendId,
-    createdAt: user.friendshipDates?.[friendId] || user.createdAt,
-  }));
-}
+  const friends: { userId: string; friendId: string; createdAt: string }[] = [];
+  let startKey: Record<string, unknown> | undefined;
 
-export async function putFriendship(userId: string, friendId: string): Promise<void> {
-  const user = await getUser(userId);
-  const friendIds = user?.friendIds || [];
-  const friendshipDates = user?.friendshipDates || {};
-  
-  // Add friendId if not already present
-  if (!friendIds.includes(friendId)) {
-    friendIds.push(friendId);
-    friendshipDates[friendId] = new Date().toISOString();
-    
-    await docClient.send(new UpdateCommand({
-      TableName: USERS_TABLE,
-      Key: { userId },
-      UpdateExpression: 'SET friendIds = :fids, friendshipDates = :fdates',
-      ExpressionAttributeValues: {
-        ':fids': friendIds,
-        ':fdates': friendshipDates,
-      },
+  do {
+    const result = await docClient.send(new QueryCommand({
+      TableName: FRIENDSHIPS_TABLE,
+      KeyConditionExpression: 'userId = :uid',
+      ExpressionAttributeValues: { ':uid': userId },
+      ...(startKey ? { ExclusiveStartKey: startKey } : {}),
     }));
-  }
-}
+    for (const item of result.Items || []) {
+      friends.push({ userId: item.userId, friendId: item.friendId, createdAt: item.createdAt });
+    }
+    startKey = result.LastEvaluatedKey;
+  } while (startKey);
 
-export async function deleteFriendship(userId: string, friendId: string): Promise<void> {
-  const user = await getUser(userId);
-  if (!user || !user.friendIds) return;
-  
-  const friendIds = user.friendIds.filter(id => id !== friendId);
-  const friendshipDates = user.friendshipDates || {};
-  delete friendshipDates[friendId];
-  
-  await docClient.send(new UpdateCommand({
-    TableName: USERS_TABLE,
-    Key: { userId },
-    UpdateExpression: 'SET friendIds = :fids, friendshipDates = :fdates',
-    ExpressionAttributeValues: {
-      ':fids': friendIds,
-      ':fdates': friendshipDates,
-    },
-  }));
+  return friends;
 }
 
 export async function getFriendCount(userId: string): Promise<number> {
-  const user = await getUser(userId);
-  return user?.friendIds?.length || 0;
+  let count = 0;
+  let startKey: Record<string, unknown> | undefined;
+
+  do {
+    const result = await docClient.send(new QueryCommand({
+      TableName: FRIENDSHIPS_TABLE,
+      KeyConditionExpression: 'userId = :uid',
+      ExpressionAttributeValues: { ':uid': userId },
+      Select: 'COUNT',
+      ...(startKey ? { ExclusiveStartKey: startKey } : {}),
+    }));
+    count += result.Count || 0;
+    startKey = result.LastEvaluatedKey;
+  } while (startKey);
+
+  return count;
+}
+
+export async function areFriends(userId: string, friendId: string): Promise<boolean> {
+  const result = await docClient.send(new GetCommand({
+    TableName: FRIENDSHIPS_TABLE,
+    Key: { userId, friendId },
+  }));
+  return result.Item !== undefined;
+}
+
+export type CreateFriendshipResult = 'created' | 'request_not_found';
+
+/**
+ * Makes two users friends and consumes the friend request, all or nothing. Repeating it is
+ * harmless: an existing friendship keeps its original date. Returns 'request_not_found' when the
+ * request was already accepted or declined, in which case nothing is written.
+ */
+export async function createFriendship(
+  userId: string,
+  friendId: string,
+  requestId: string
+): Promise<CreateFriendshipResult> {
+  const now = new Date().toISOString();
+  const stamp = (from: string, to: string) => ({
+    Update: {
+      TableName: FRIENDSHIPS_TABLE,
+      Key: { userId: from, friendId: to },
+      UpdateExpression: 'SET createdAt = if_not_exists(createdAt, :now)',
+      ExpressionAttributeValues: { ':now': now },
+    },
+  });
+
+  try {
+    await transact([
+      stamp(userId, friendId),
+      stamp(friendId, userId),
+      {
+        Delete: {
+          TableName: FRIEND_REQUESTS_TABLE,
+          Key: { requestId },
+          ConditionExpression: 'attribute_exists(requestId)',
+        },
+      },
+    ]);
+    return 'created';
+  } catch (err) {
+    // The request is the third item; its condition fails when it no longer exists.
+    if (cancellationCodes(err)[2] === 'ConditionalCheckFailed') return 'request_not_found';
+    throw err;
+  }
+}
+
+/** Removes the friendship in both directions, all or nothing. Removing a non-friend is harmless. */
+export async function removeFriendship(userId: string, friendId: string): Promise<void> {
+  await transact([
+    { Delete: { TableName: FRIENDSHIPS_TABLE, Key: { userId, friendId } } },
+    { Delete: { TableName: FRIENDSHIPS_TABLE, Key: { userId: friendId, friendId: userId } } },
+  ]);
+}
+
+const MAX_TRANSACTION_ATTEMPTS = 3;
+
+async function transact(items: TransactWriteCommandInput['TransactItems']): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await docClient.send(new TransactWriteCommand({ TransactItems: items }));
+      return;
+    } catch (err) {
+      // Another transaction touching the same items is transient: wait a moment and try again.
+      const conflict = cancellationCodes(err).includes('TransactionConflict');
+      if (!conflict || attempt >= MAX_TRANSACTION_ATTEMPTS) throw err;
+      await new Promise((resolve) => setTimeout(resolve, 25 * attempt + Math.random() * 25));
+    }
+  }
+}
+
+/** The per-item outcome of a cancelled transaction, in the order the items were sent. */
+function cancellationCodes(err: unknown): (string | undefined)[] {
+  const failure = err as { name?: string; CancellationReasons?: { Code?: string }[] } | undefined;
+  return failure?.name === 'TransactionCanceledException'
+    ? (failure.CancellationReasons || []).map((reason) => reason?.Code)
+    : [];
 }
 
 // --- Users Table ---
@@ -148,15 +216,9 @@ export async function getUser(userId: string): Promise<UserProfile | undefined> 
 }
 
 export async function putUser(profile: UserProfile): Promise<void> {
-  const item = {
-    ...profile,
-    friendIds: profile.friendIds || [],
-    friendshipDates: profile.friendshipDates || {},
-  };
-  
   await docClient.send(new PutCommand({
     TableName: USERS_TABLE,
-    Item: item,
+    Item: profile,
   }));
 }
 

@@ -19,10 +19,11 @@ Nearby Friends is an academic-purpose serverless real-time location sharing back
    - **DynamoDB TTL**: Automatic inactivity cleanup (default: 10 minutes / 600s).
 
 3. **Database Schema (Amazon DynamoDB)**:
-   - `Users`: PK `userId` (Cognito `sub` UUID). Also stores `friendIds` (string set) and `friendshipDates` (map of friendId → createdAt).
+   - `Users`: PK `userId` (Cognito `sub` UUID). Profile only: `displayName`, `profilePictureKey`, `discoverable`, `createdAt`.
+   - `Friendships`: PK `userId`, SK `friendId`, GSI `friendId-index` (reverse lookup), attribute `createdAt`. One item per direction, so a friendship is two items.
    - `Connections`: PK `connectionId`, GSI `userId-index`, attributes `latitude`, `longitude`, `timestamp`, `expiresAt` (TTL), Streams enabled (`NEW_AND_OLD_IMAGES`).
    - `FriendRequests`: PK `requestId`, GSIs on `toUserId` and `fromUserId`.
-   > **No separate `Friendships` table**: friend data is embedded in the `Users` item (single `GetItem` lookup).
+   > **Friends live in their own `Friendships` table**, not on the `Users` item: profile reads stay small, there is no per-item size ceiling, and friend changes cannot overwrite each other. Accepting a request creates both directions and deletes the request in one DynamoDB transaction (`createFriendship`); removing a friend deletes both directions in one (`removeFriendship`).
 
 4. **Frontend**:
    - Single-file vanilla HTML/CSS/JavaScript in `frontend/index.html` (no build step, no framework).

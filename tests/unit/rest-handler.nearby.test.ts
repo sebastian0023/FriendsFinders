@@ -4,8 +4,9 @@ import { restEvent, resultStatus, resultJson } from '../helpers/rest-events';
 // Factories keep the real modules (and their AWS SDK clients) from loading at all.
 jest.mock('../../src/utils/dynamo-client', () => ({
   getFriends: jest.fn(),
-  putFriendship: jest.fn(),
-  deleteFriendship: jest.fn(),
+  createFriendship: jest.fn(),
+  removeFriendship: jest.fn(),
+  areFriends: jest.fn(),
   getFriendCount: jest.fn(),
   getUser: jest.fn(),
   putUser: jest.fn(),

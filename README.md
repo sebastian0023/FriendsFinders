@@ -73,11 +73,12 @@ Full architecture diagrams live in [`generated-diagrams/`](generated-diagrams/):
 
 | Table          | PK           | SK | GSI                  | TTL       | Notes                                          |
 | -------------- | ------------ | -- | -------------------- | --------- | ---------------------------------------------- |
-| Users          | userId       | —  | —                    | —         | Also stores `friendIds[]` + `friendshipDates{}` |
-| Connections    | connectionId | —  | userId-index         | expiresAt | Embeds location + drives fan-out via Streams    |
-| FriendRequests | requestId    | —  | toUserId, fromUserId | —         |                                                |
+| Users          | userId       | —        | —                    | —         | Profile only                                   |
+| Friendships    | userId       | friendId | friendId-index       | —         | One item per direction, written in a transaction |
+| Connections    | connectionId | —        | userId-index         | expiresAt | Embeds location + drives fan-out via Streams    |
+| FriendRequests | requestId    | —        | toUserId, fromUserId | —         |                                                |
 
-> **Note:** There is no separate `Friendships` table. Friend relationships are stored as a `friendIds` array and a `friendshipDates` map directly on each `Users` item, keeping friend lookups to a single `GetItem` call.
+> **Note:** Friend relationships live in their own `Friendships` table, one item per direction (`userId` → `friendId`). Accepting a friend request creates both items and deletes the request in a single DynamoDB transaction, and removing a friend deletes both items in one, so a friendship is never half-created or half-removed. Keeping friends out of the `Users` item keeps profile reads small and removes any per-user size limit.
 
 The Connections table embeds location data (latitude, longitude, timestamp) alongside connection state. DynamoDB Streams (NEW_AND_OLD_IMAGES) on this table triggers the fanout-handler when location updates occur.
 

@@ -5,8 +5,9 @@ import { restEvent, resultStatus, resultJson, resultHeaders } from '../helpers/r
 // Factories keep the real modules (and their AWS SDK clients) from loading at all.
 jest.mock('../../src/utils/dynamo-client', () => ({
   getFriends: jest.fn(),
-  putFriendship: jest.fn(),
-  deleteFriendship: jest.fn(),
+  createFriendship: jest.fn(),
+  removeFriendship: jest.fn(),
+  areFriends: jest.fn(),
   getFriendCount: jest.fn(),
   getUser: jest.fn(),
   putUser: jest.fn(),
@@ -32,8 +33,9 @@ import { generateDownloadUrl } from '../../src/utils/s3-client';
 import { FriendRequest, UserProfile } from '../../src/types';
 
 const mockGetFriends = dynamo.getFriends as jest.MockedFunction<typeof dynamo.getFriends>;
-const mockPutFriendship = dynamo.putFriendship as jest.MockedFunction<typeof dynamo.putFriendship>;
-const mockDeleteFriendship = dynamo.deleteFriendship as jest.MockedFunction<typeof dynamo.deleteFriendship>;
+const mockCreateFriendship = dynamo.createFriendship as jest.MockedFunction<typeof dynamo.createFriendship>;
+const mockRemoveFriendship = dynamo.removeFriendship as jest.MockedFunction<typeof dynamo.removeFriendship>;
+const mockAreFriends = dynamo.areFriends as jest.MockedFunction<typeof dynamo.areFriends>;
 const mockGetFriendCount = dynamo.getFriendCount as jest.MockedFunction<typeof dynamo.getFriendCount>;
 const mockGetUser = dynamo.getUser as jest.MockedFunction<typeof dynamo.getUser>;
 const mockPutFriendRequest = dynamo.putFriendRequest as jest.MockedFunction<typeof dynamo.putFriendRequest>;
@@ -90,8 +92,9 @@ function givenUsers(users: Record<string, UserProfile>): void {
 
 const everyDataCall = () => [
   mockGetFriends,
-  mockPutFriendship,
-  mockDeleteFriendship,
+  mockCreateFriendship,
+  mockRemoveFriendship,
+  mockAreFriends,
   mockGetFriendCount,
   mockGetUser,
   mockPutFriendRequest,
@@ -110,8 +113,9 @@ beforeEach(() => {
   mockGetUser.mockResolvedValue(undefined);
   mockGetFriendRequest.mockResolvedValue(undefined);
   mockGetRequestsByToUser.mockResolvedValue([]);
-  mockPutFriendship.mockResolvedValue(undefined);
-  mockDeleteFriendship.mockResolvedValue(undefined);
+  mockCreateFriendship.mockResolvedValue('created');
+  mockRemoveFriendship.mockResolvedValue(undefined);
+  mockAreFriends.mockResolvedValue(false);
   mockPutFriendRequest.mockResolvedValue(undefined);
   mockDeleteFriendRequest.mockResolvedValue(undefined);
   mockDownloadUrl.mockImplementation(async (key: string) => `https://signed.example/${key}`);
@@ -169,7 +173,7 @@ describe('rest-handler: routing', () => {
   it('has no handler behind POST /friends/{friendId}', async () => {
     const result = await handler(restEvent('POST', '/friends/friend-1'));
     expect(resultStatus(result)).toBe(404);
-    expect(mockPutFriendship).not.toHaveBeenCalled();
+    expect(mockCreateFriendship).not.toHaveBeenCalled();
   });
 
   it('answers every response as JSON', async () => {
@@ -264,33 +268,31 @@ describe('rest-handler: GET /friends', () => {
 // ── DELETE /friends/{friendId} ────────────────────────────────────────────────
 
 describe('rest-handler: DELETE /friends/{friendId}', () => {
-  it('removes the friendship in both directions', async () => {
+  it('removes the friendship in both directions with a single call', async () => {
     const result = await handler(restEvent('DELETE', '/friends/friend-1'));
 
     expect(resultStatus(result)).toBe(200);
     expect(resultJson(result)).toEqual({ message: 'Friend removed' });
-    expect(mockDeleteFriendship).toHaveBeenCalledTimes(2);
-    expect(mockDeleteFriendship).toHaveBeenCalledWith('user-1', 'friend-1');
-    expect(mockDeleteFriendship).toHaveBeenCalledWith('friend-1', 'user-1');
+    expect(mockRemoveFriendship).toHaveBeenCalledTimes(1);
+    expect(mockRemoveFriendship).toHaveBeenCalledWith('user-1', 'friend-1');
   });
 
   // Documents current behaviour: the handler never checks the friendship exists first,
   // so removing a non-friend is an idempotent success rather than a 404.
   it('succeeds even when the two users were not friends', async () => {
-    mockGetFriends.mockResolvedValue([]);
     const result = await handler(restEvent('DELETE', '/friends/stranger'));
     expect(resultStatus(result)).toBe(200);
   });
 
-  // Documents current behaviour: the two deletes are separate writes, so a failure on the
-  // second leaves the friendship removed on one side only.
-  it('returns 500 after the first delete when the second one fails, leaving a half-removed friendship', async () => {
-    mockDeleteFriendship.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('throttled'));
+  // Both directions are removed in one transaction, so a failure leaves the friendship
+  // exactly as it was: there is no half-removed state.
+  it('returns 500 when the removal fails, having attempted it only once', async () => {
+    mockRemoveFriendship.mockRejectedValue(new Error('throttled'));
 
     const result = await handler(restEvent('DELETE', '/friends/friend-1'));
 
     expect(resultStatus(result)).toBe(500);
-    expect(mockDeleteFriendship).toHaveBeenCalledTimes(2);
+    expect(mockRemoveFriendship).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -323,13 +325,14 @@ describe('rest-handler: POST /friend-requests/{toUserId}', () => {
   });
 
   it('rejects a request to an existing friend with 409', async () => {
-    mockGetFriends.mockResolvedValue([friendship('user-2')]);
+    mockAreFriends.mockResolvedValue(true);
 
     const result = await send();
 
     expect(resultStatus(result)).toBe(409);
     expect(resultJson(result)).toEqual({ error: 'Already friends' });
-    expect(mockGetFriends).toHaveBeenCalledWith('user-1');
+    expect(mockAreFriends).toHaveBeenCalledWith('user-1', 'user-2');
+    expect(mockGetFriends).not.toHaveBeenCalled(); // a single lookup, not the whole friend list
     expect(mockPutFriendRequest).not.toHaveBeenCalled();
   });
 
@@ -416,18 +419,25 @@ describe('rest-handler: PUT /friend-requests/{requestId}/accept', () => {
     mockGetFriendRequest.mockResolvedValue(friendRequest());
   });
 
-  it('creates the friendship in both directions, then deletes the request', async () => {
+  it('creates the friendship and consumes the request in a single call', async () => {
     const result = await accept();
 
     expect(resultStatus(result)).toBe(200);
     expect(resultJson(result)).toEqual({ message: 'Friend request accepted' });
-    expect(mockPutFriendship).toHaveBeenCalledTimes(2);
-    expect(mockPutFriendship).toHaveBeenCalledWith('user-1', 'user-2');
-    expect(mockPutFriendship).toHaveBeenCalledWith('user-2', 'user-1');
-    expect(mockDeleteFriendRequest).toHaveBeenCalledWith('req-1');
+    expect(mockCreateFriendship).toHaveBeenCalledTimes(1);
+    expect(mockCreateFriendship).toHaveBeenCalledWith('user-1', 'user-2', 'req-1');
+    // the request is deleted inside the same transaction, never as a separate step
+    expect(mockDeleteFriendRequest).not.toHaveBeenCalled();
+  });
 
-    const lastPut = Math.max(...mockPutFriendship.mock.invocationCallOrder);
-    expect(mockDeleteFriendRequest.mock.invocationCallOrder[0]).toBeGreaterThan(lastPut);
+  // The request can disappear between the check and the write (declined, or accepted twice).
+  it('returns 409 when the request was removed in the meantime', async () => {
+    mockCreateFriendship.mockResolvedValue('request_not_found');
+
+    const result = await accept();
+
+    expect(resultStatus(result)).toBe(409);
+    expect(resultJson(result)).toEqual({ error: 'Request is not pending' });
   });
 
   it('looks the request up by the id in the path', async () => {
@@ -442,7 +452,7 @@ describe('rest-handler: PUT /friend-requests/{requestId}/accept', () => {
 
     expect(resultStatus(result)).toBe(404);
     expect(resultJson(result)).toEqual({ error: 'Friend request not found' });
-    expect(mockPutFriendship).not.toHaveBeenCalled();
+    expect(mockCreateFriendship).not.toHaveBeenCalled();
   });
 
   it('returns 403 when the caller is not the recipient', async () => {
@@ -451,7 +461,7 @@ describe('rest-handler: PUT /friend-requests/{requestId}/accept', () => {
     const result = await accept();
 
     expect(resultStatus(result)).toBe(403);
-    expect(mockPutFriendship).not.toHaveBeenCalled();
+    expect(mockCreateFriendship).not.toHaveBeenCalled();
     expect(mockDeleteFriendRequest).not.toHaveBeenCalled();
   });
 
@@ -461,7 +471,7 @@ describe('rest-handler: PUT /friend-requests/{requestId}/accept', () => {
     const result = await accept();
 
     expect(resultStatus(result)).toBe(403);
-    expect(mockPutFriendship).not.toHaveBeenCalled();
+    expect(mockCreateFriendship).not.toHaveBeenCalled();
   });
 
   it.each(['accepted', 'declined'] as const)('returns 409 for a request that is already %s', async (status) => {
@@ -471,7 +481,7 @@ describe('rest-handler: PUT /friend-requests/{requestId}/accept', () => {
 
     expect(resultStatus(result)).toBe(409);
     expect(resultJson(result)).toEqual({ error: 'Request is not pending' });
-    expect(mockPutFriendship).not.toHaveBeenCalled();
+    expect(mockCreateFriendship).not.toHaveBeenCalled();
   });
 
   describe('friend limit', () => {
@@ -493,7 +503,7 @@ describe('rest-handler: PUT /friend-requests/{requestId}/accept', () => {
 
       expect(resultStatus(result)).toBe(409);
       expect(resultJson(result)).toEqual({ error: 'Friend limit reached' });
-      expect(mockPutFriendship).not.toHaveBeenCalled();
+      expect(mockCreateFriendship).not.toHaveBeenCalled();
       expect(mockDeleteFriendRequest).not.toHaveBeenCalled();
     });
 
@@ -510,15 +520,15 @@ describe('rest-handler: PUT /friend-requests/{requestId}/accept', () => {
     });
   });
 
-  // Documents current behaviour: the two friendship writes are separate, so a failure on
-  // the second leaves a one-sided friendship, and the request is neither deleted nor retried.
-  it('returns 500 and keeps the request when the second friendship write fails, leaving a one-sided friendship', async () => {
-    mockPutFriendship.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('throttled'));
+  // Both sides and the request are handled by one transaction, so a failure leaves nothing behind:
+  // there is no one-sided friendship and the request stays pending.
+  it('returns 500 when the transaction fails, having attempted it only once', async () => {
+    mockCreateFriendship.mockRejectedValue(new Error('throttled'));
 
     const result = await accept();
 
     expect(resultStatus(result)).toBe(500);
-    expect(mockPutFriendship).toHaveBeenCalledTimes(2);
+    expect(mockCreateFriendship).toHaveBeenCalledTimes(1);
     expect(mockDeleteFriendRequest).not.toHaveBeenCalled();
   });
 });
@@ -538,7 +548,7 @@ describe('rest-handler: PUT /friend-requests/{requestId}/decline', () => {
     expect(resultStatus(result)).toBe(200);
     expect(resultJson(result)).toEqual({ message: 'Friend request declined' });
     expect(mockDeleteFriendRequest).toHaveBeenCalledWith('req-1');
-    expect(mockPutFriendship).not.toHaveBeenCalled();
+    expect(mockCreateFriendship).not.toHaveBeenCalled();
   });
 
   it('looks the request up by the id in the path', async () => {
