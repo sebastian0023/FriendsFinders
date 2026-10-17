@@ -28,9 +28,24 @@ resource "aws_dynamodb_table" "connections" {
     type = "S"
   }
 
+  attribute {
+    name = "geoCell"
+    type = "S"
+  }
+
   global_secondary_index {
     name            = "userId-index"
     hash_key        = "userId"
+    projection_type = "ALL"
+  }
+
+  # Finds the connections near a point without scanning the table. Each connection with a
+  # location stores the grid cell it is in (geoCell); a search queries only the few cells that
+  # can contain anyone within the search radius. Connections without a location have no
+  # geoCell, so they are not in this index at all.
+  global_secondary_index {
+    name            = "geoCell-index"
+    hash_key        = "geoCell"
     projection_type = "ALL"
   }
 
