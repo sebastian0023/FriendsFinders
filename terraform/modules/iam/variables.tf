@@ -23,6 +23,11 @@ variable "friend_requests_table_arn" {
   type        = string
 }
 
+variable "friendships_table_arn" {
+  description = "ARN of the Friendships DynamoDB table"
+  type        = string
+}
+
 variable "s3_bucket_arn" {
   description = "ARN of the profile pictures S3 bucket"
   type        = string

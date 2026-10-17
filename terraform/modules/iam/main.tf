@@ -39,6 +39,17 @@ data "aws_iam_policy_document" "websocket_handler" {
     ]
   }
 
+  # Lists a user's friends.
+  statement {
+    sid = "FriendshipsRead"
+    actions = [
+      "dynamodb:Query",
+    ]
+    resources = [
+      var.friendships_table_arn,
+    ]
+  }
+
   statement {
     sid = "SSMAccess"
     actions = [
@@ -105,6 +116,22 @@ data "aws_iam_policy_document" "rest_handler" {
       "${var.connections_table_arn}/index/*",
       var.friend_requests_table_arn,
       "${var.friend_requests_table_arn}/index/*",
+    ]
+  }
+
+  # Reads friendships and creates or removes them. A transaction is authorised through the
+  # individual PutItem and DeleteItem permissions, so no separate transaction action is needed.
+  statement {
+    sid = "FriendshipsAccess"
+    actions = [
+      "dynamodb:GetItem",
+      "dynamodb:Query",
+      "dynamodb:PutItem",
+      "dynamodb:DeleteItem",
+    ]
+    resources = [
+      var.friendships_table_arn,
+      "${var.friendships_table_arn}/index/*",
     ]
   }
 
@@ -192,6 +219,17 @@ data "aws_iam_policy_document" "fanout_handler" {
       var.users_table_arn,
       var.connections_table_arn,
       "${var.connections_table_arn}/index/*",
+    ]
+  }
+
+  # Lists a user's friends.
+  statement {
+    sid = "FriendshipsRead"
+    actions = [
+      "dynamodb:Query",
+    ]
+    resources = [
+      var.friendships_table_arn,
     ]
   }
 

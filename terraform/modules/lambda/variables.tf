@@ -33,6 +33,11 @@ variable "friend_requests_table_name" {
   type        = string
 }
 
+variable "friendships_table_name" {
+  description = "Name of the Friendships DynamoDB table"
+  type        = string
+}
+
 variable "connections_table_stream_arn" {
   description = "ARN of the Connections DynamoDB table stream"
   type        = string
