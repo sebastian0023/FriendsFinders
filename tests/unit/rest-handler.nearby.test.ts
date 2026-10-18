@@ -91,10 +91,16 @@ function givenConnections(byUser: Record<string, ConnectionRecord[]>): void {
   mockGetConnections.mockImplementation(async (userId: string) => byUser[userId] ?? []);
 }
 
-/** Makes getUser resolve profiles from a map keyed by userId. */
-function givenUsers(users: Record<string, UserProfile>): void {
-  mockGetUser.mockImplementation(async (id: string) => users[id]);
+const CALLER = 'user-1';
+
+/** Makes getUser resolve profiles from a map keyed by userId. The caller always has a profile. */
+function givenUsers(users: Record<string, UserProfile> = {}): void {
+  const all: Record<string, UserProfile> = { [CALLER]: profile({ userId: CALLER, displayName: 'Caller' }), ...users };
+  mockGetUser.mockImplementation(async (id: string) => all[id]);
 }
+
+/** The profiles looked up for people other than the caller. */
+const otherProfileLookups = () => mockGetUser.mock.calls.map(([id]) => id).filter((id) => id !== CALLER);
 
 let errorSpy: jest.SpyInstance;
 
@@ -102,7 +108,7 @@ beforeEach(() => {
   // clearMocks resets call history but keeps implementations, so set safe defaults every time.
   mockGetConfig.mockResolvedValue(CONFIG);
   mockGetFriends.mockResolvedValue([]);
-  mockGetUser.mockResolvedValue(undefined);
+  givenUsers();
   mockGetConnections.mockResolvedValue([]);
   mockGetConnectionsNear.mockResolvedValue([]);
   mockDownloadUrl.mockImplementation(async (key: string) => `https://signed.example/${key}`);
@@ -228,7 +234,7 @@ describe('rest-handler: GET /nearby-friends', () => {
       const result = await nearbyFriends();
 
       expect(resultJson(result)).toEqual([]);
-      expect(mockGetUser).not.toHaveBeenCalled();
+      expect(otherProfileLookups()).toEqual([]);
     });
 
     it('uses the configured radius', async () => {
@@ -468,8 +474,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
       const result = await nearbyStrangers();
 
       expect(resultJson(result).map((s: { userId: string }) => s.userId)).toEqual(['s1']);
-      expect(mockGetUser).toHaveBeenCalledTimes(1);
-      expect(mockGetUser).toHaveBeenCalledWith('s1');
+      expect(otherProfileLookups()).toEqual(['s1']);
     });
 
     it('uses the configured radius', async () => {
@@ -611,8 +616,7 @@ describe('rest-handler: GET /nearby-strangers', () => {
 
         await nearbyStrangers();
 
-        expect(mockGetUser).toHaveBeenCalledTimes(1);
-        expect(mockGetUser).toHaveBeenCalledWith('s1');
+        expect(otherProfileLookups()).toEqual(['s1']);
       });
 
       it('does not use up several slots of the cap', async () => {

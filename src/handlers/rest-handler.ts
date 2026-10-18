@@ -30,42 +30,45 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
     // Route matching
     // GET /friends   (must be checked BEFORE /friends/{friendId})
     if (method === 'GET' && path === '/friends') {
-      return await handleGetFriends(event);
+      return await withProfile(event, handleGetFriends);
     }
 
     // DELETE /friends/{friendId}
     if (method === 'DELETE' && path.match(/^\/friends\/[^/]+$/)) {
-      return await handleRemoveFriend(event);
+      return await withProfile(event, handleRemoveFriend);
     }
 
     // POST /friend-requests/{toUserId}
     if (method === 'POST' && path.match(/^\/friend-requests\/[^/]+$/)) {
-      return await handleCreateFriendRequest(event);
+      return await withProfile(event, handleCreateFriendRequest);
     }
 
     // GET /friend-requests
     if (method === 'GET' && path === '/friend-requests') {
-      return await handleGetFriendRequests(event);
+      return await withProfile(event, handleGetFriendRequests);
     }
 
     // PUT /friend-requests/{requestId}/accept
     if (method === 'PUT' && path.match(/^\/friend-requests\/[^/]+\/accept$/)) {
-      return await handleAcceptFriendRequest(event);
+      return await withProfile(event, handleAcceptFriendRequest);
     }
 
     // PUT /friend-requests/{requestId}/decline
     if (method === 'PUT' && path.match(/^\/friend-requests\/[^/]+\/decline$/)) {
-      return await handleDeclineFriendRequest(event);
+      return await withProfile(event, handleDeclineFriendRequest);
     }
 
     // GET /users/{userId}/profile-picture-upload-url
     if (method === 'GET' && path.match(/^\/users\/[^/]+\/profile-picture-upload-url$/)) {
-      return await handleGetUploadUrl(event);
+      return await withProfile(event, handleGetUploadUrl);
     }
 
-    // GET /users/{userId}/profile
+    // GET /users/{userId}/profile (your own is open to you without a profile: that is how a new
+    // user finds out they still have to choose a name)
     if (method === 'GET' && path.match(/^\/users\/[^/]+\/profile$/)) {
-      return await handleGetProfile(event);
+      const target = extractPathParam(path, /^\/users\/([^/]+)\/profile$/);
+      const isOwn = target !== null && target === getAuthUserId(event);
+      return await (isOwn ? handleGetProfile(event) : withProfile(event, handleGetProfile));
     }
 
     // PUT /users/{userId}/profile
@@ -75,12 +78,12 @@ export async function handler(event: APIGatewayProxyEventV2): Promise<APIGateway
 
     // GET /nearby-friends (must be before nearby-strangers; neither uses path params)
     if (method === 'GET' && path === '/nearby-friends') {
-      return await handleNearbyFriends(event);
+      return await withProfile(event, handleNearbyFriends);
     }
 
     // GET /nearby-strangers
     if (method === 'GET' && path === '/nearby-strangers') {
-      return await handleNearbyStrangers(event);
+      return await withProfile(event, handleNearbyStrangers);
     }
 
     return response(404, { error: 'Not found' });
@@ -94,6 +97,23 @@ function getAuthUserId(event: APIGatewayProxyEventV2): string | null {
   // API Gateway JWT authorizer injects verified Cognito claims
   const claims = (event.requestContext as any)?.authorizer?.jwt?.claims;
   return claims?.sub || null;
+}
+
+/**
+ * Nobody can use the app without a name. Answers 403 when the caller has no profile, and null when
+ * they do (or are not signed in at all, which the route itself answers with 401).
+ */
+async function requireProfile(event: APIGatewayProxyEventV2): Promise<APIGatewayProxyResultV2 | null> {
+  const userId = getAuthUserId(event);
+  if (!userId) return null;
+  return (await getUser(userId)) ? null : response(403, { error: 'Set a display name first' });
+}
+
+async function withProfile(
+  event: APIGatewayProxyEventV2,
+  handle: (event: APIGatewayProxyEventV2) => Promise<APIGatewayProxyResultV2>
+): Promise<APIGatewayProxyResultV2> {
+  return (await requireProfile(event)) ?? (await handle(event));
 }
 
 function extractPathParam(path: string, pattern: RegExp): string | null {
@@ -168,6 +188,9 @@ async function handleCreateFriendRequest(event: APIGatewayProxyEventV2): Promise
     return response(400, { error: 'Cannot send friend request to yourself' });
   }
 
+  // Someone with no profile has no name and cannot use the app, so they cannot be asked.
+  if (!(await getUser(toUserId))) return response(404, { error: 'User not found' });
+
   // Check if already friends
   if (await areFriends(fromUserId, toUserId)) {
     return response(409, { error: 'Already friends' });
@@ -202,17 +225,15 @@ async function handleGetFriendRequests(event: APIGatewayProxyEventV2): Promise<A
   const requests = await getFriendRequestsByToUser(userId);
   const pending = requests.filter(r => r.status === 'pending');
 
+  // A sender without a profile has no name, so their request is left out rather than shown as "User".
   const enriched = await Promise.all(
     pending.map(async r => {
       const fromProfile = await getUser(r.fromUserId);
-      return {
-        ...r,
-        fromDisplayName: fromProfile?.displayName || 'User',
-      };
+      return fromProfile ? { ...r, fromDisplayName: fromProfile.displayName } : null;
     }),
   );
 
-  return response(200, enriched);
+  return response(200, enriched.filter((r) => r !== null));
 }
 
 // --- PUT /friend-requests/{requestId}/accept ---
@@ -312,9 +333,14 @@ async function handleUpdateProfile(event: APIGatewayProxyEventV2): Promise<APIGa
   // Check if user exists; if not, create
   const existingUser = await getUser(userId);
   if (!existingUser) {
+    // Everyone needs a name: there is no default.
+    if (fields.displayName === undefined) {
+      return response(400, { error: 'displayName is required to create a profile' });
+    }
+
     const newProfile: UserProfile = {
       userId,
-      displayName: fields.displayName ?? 'User',
+      displayName: fields.displayName,
       profilePictureKey: fields.profilePictureKey,
       discoverable: fields.discoverable ?? false,
       createdAt: new Date().toISOString(),

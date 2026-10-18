@@ -85,9 +85,15 @@ const friendship = (friendId: string, createdAt = '2026-02-02T00:00:00.000Z') =>
   createdAt,
 });
 
-/** Makes getUser resolve profiles from a map keyed by userId. */
-function givenUsers(users: Record<string, UserProfile>): void {
-  mockGetUser.mockImplementation(async (id: string) => users[id]);
+const CALLER = 'user-1';
+
+/** The profiles looked up for people other than the caller. */
+const otherProfileLookups = () => mockGetUser.mock.calls.map(([id]) => id).filter((id) => id !== CALLER);
+
+/** Makes getUser resolve profiles from a map keyed by userId. The caller always has a profile. */
+function givenUsers(users: Record<string, UserProfile> = {}): void {
+  const all: Record<string, UserProfile> = { [CALLER]: user({ userId: CALLER, displayName: 'Caller' }), ...users };
+  mockGetUser.mockImplementation(async (id: string) => all[id]);
 }
 
 const everyDataCall = () => [
@@ -110,7 +116,7 @@ beforeEach(() => {
   mockGetConfig.mockResolvedValue(CONFIG);
   mockGetFriends.mockResolvedValue([]);
   mockGetFriendCount.mockResolvedValue(0);
-  mockGetUser.mockResolvedValue(undefined);
+  givenUsers();
   mockGetFriendRequest.mockResolvedValue(undefined);
   mockGetRequestsByToUser.mockResolvedValue([]);
   mockCreateFriendship.mockResolvedValue('created');
@@ -301,6 +307,10 @@ describe('rest-handler: DELETE /friends/{friendId}', () => {
 describe('rest-handler: POST /friend-requests/{toUserId}', () => {
   const send = (toUserId = 'user-2') => handler(restEvent('POST', `/friend-requests/${toUserId}`));
 
+  beforeEach(() => {
+    givenUsers({ 'user-2': user() }); // the person being asked exists
+  });
+
   it('creates a pending request and returns it with 201', async () => {
     const result = await send();
 
@@ -358,14 +368,33 @@ describe('rest-handler: POST /friend-requests/{toUserId}', () => {
     expect(resultStatus(result)).toBe(201);
   });
 
-  // Documents current behaviour: neither the target's existence nor a request already
-  // sent the other way is checked, so requests can cross and can target unknown ids.
-  it('does not check that the target user exists', async () => {
+  // Someone with no profile has no name and cannot use the app, so they cannot be asked.
+  it('returns 404 when the person being asked has no profile, and stores nothing', async () => {
     const result = await send('no-such-user');
-    expect(resultStatus(result)).toBe(201);
-    expect(mockGetUser).not.toHaveBeenCalled();
+
+    expect(resultStatus(result)).toBe(404);
+    expect(resultJson(result)).toEqual({ error: 'User not found' });
+    expect(mockGetUser).toHaveBeenCalledWith('no-such-user');
+    expect(mockPutFriendRequest).not.toHaveBeenCalled();
   });
 
+  it('reports a missing person before anything else about them', async () => {
+    mockAreFriends.mockResolvedValue(true);
+    mockGetRequestsByToUser.mockResolvedValue([friendRequest({ fromUserId: 'user-1', toUserId: 'ghost' })]);
+
+    const result = await send('ghost');
+
+    expect(resultStatus(result)).toBe(404);
+  });
+
+  it('still refuses a request to yourself before looking anyone up', async () => {
+    const result = await send('user-1');
+
+    expect(resultStatus(result)).toBe(400);
+    expect(otherProfileLookups()).toEqual([]);
+  });
+
+  // Documents current behaviour: a request already sent the other way is not detected.
   it('does not look for a request the target already sent to the caller', async () => {
     const result = await send();
     expect(resultStatus(result)).toBe(201);
@@ -401,12 +430,18 @@ describe('rest-handler: GET /friend-requests', () => {
     ]);
   });
 
-  it('falls back to "User" when the sender has no profile', async () => {
-    mockGetRequestsByToUser.mockResolvedValue([friendRequest({ fromUserId: 'ghost' })]);
+  // A sender without a profile has no name and cannot use the app: never show them as "User".
+  it('leaves out requests from senders who have no profile', async () => {
+    mockGetRequestsByToUser.mockResolvedValue([
+      friendRequest({ requestId: 'r-ghost', fromUserId: 'ghost' }),
+      friendRequest({ requestId: 'r-ana', fromUserId: 'user-2' }),
+    ]);
+    givenUsers({ 'user-2': user({ userId: 'user-2', displayName: 'Ana' }) });
 
     const result = await list();
 
-    expect(resultJson(result)[0].fromDisplayName).toBe('User');
+    expect(resultJson(result).map((r: { requestId: string }) => r.requestId)).toEqual(['r-ana']);
+    expect(JSON.stringify(resultJson(result))).not.toContain('"User"');
   });
 });
 

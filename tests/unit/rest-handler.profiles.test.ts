@@ -64,7 +64,10 @@ let errorSpy: jest.SpyInstance;
 beforeEach(() => {
   // clearMocks resets call history but keeps implementations, so set safe defaults every time.
   mockGetConfig.mockResolvedValue(CONFIG);
-  mockGetUser.mockResolvedValue(undefined);
+  // By default only the caller has a profile.
+  mockGetUser.mockImplementation(async (id: string) =>
+    id === 'user-1' ? user({ userId: 'user-1', displayName: 'Caller' }) : undefined
+  );
   mockPutUser.mockResolvedValue(undefined);
   mockUpdateUser.mockResolvedValue(undefined);
   mockDownloadUrl.mockImplementation(async (key: string) => `https://signed.example/${key}`);
@@ -88,6 +91,27 @@ describe('rest-handler: GET /users/{userId}/profile', () => {
     expect(resultStatus(result)).toBe(404);
     expect(resultJson(result)).toEqual({ error: 'User not found' });
     expect(mockGetUser).toHaveBeenCalledWith('ghost');
+  });
+
+  // Reading your own profile is how a new user learns they still have to choose a name.
+  it('answers 404 for your own profile when you have not created one yet', async () => {
+    mockGetUser.mockResolvedValue(undefined);
+
+    const result = await getProfile('user-1');
+
+    expect(resultStatus(result)).toBe(404);
+    expect(resultJson(result)).toEqual({ error: 'User not found' });
+  });
+
+  it("answers 403 for someone else's profile when you have no profile yourself", async () => {
+    mockGetUser.mockResolvedValue(undefined);
+
+    const result = await getProfile('user-2');
+
+    expect(resultStatus(result)).toBe(403);
+    expect(resultJson(result)).toEqual({ error: 'Set a display name first' });
+    expect(mockGetUser).toHaveBeenCalledTimes(1);
+    expect(mockGetUser).toHaveBeenCalledWith('user-1');
   });
 
   it('returns the public profile with a signed picture URL', async () => {
@@ -163,6 +187,10 @@ describe('rest-handler: PUT /users/{userId}/profile', () => {
   });
 
   describe('when the profile does not exist yet', () => {
+    beforeEach(() => {
+      mockGetUser.mockResolvedValue(undefined);
+    });
+
     it('creates it from the body', async () => {
       const result = await put({
         body: { displayName: 'Ana', profilePictureKey: OWN_KEY, discoverable: true },
@@ -180,20 +208,26 @@ describe('rest-handler: PUT /users/{userId}/profile', () => {
       expect(mockUpdateUser).not.toHaveBeenCalled();
     });
 
-    it('defaults to display name "User" and not discoverable', async () => {
-      await put({ body: {} });
+    // Every user must have a name: there is no default.
+    it.each([
+      ['an empty object', { body: {} }],
+      ['only discoverable', { body: { discoverable: true } }],
+      ['only a picture', { body: { profilePictureKey: OWN_KEY } }],
+      ['no body at all', {}],
+    ])('refuses to create a profile from %s, because a display name is required', async (_name, opts) => {
+      const result = await put(opts);
 
-      expect(mockPutUser).toHaveBeenCalledWith(
-        expect.objectContaining({ userId: 'user-1', displayName: 'User', discoverable: false })
-      );
+      expect(resultStatus(result)).toBe(400);
+      expect(resultJson(result)).toEqual({ error: 'displayName is required to create a profile' });
+      expect(mockPutUser).not.toHaveBeenCalled();
     });
 
-    it('defaults when there is no body at all', async () => {
-      const result = await put();
+    it('creates a profile that is not discoverable unless asked', async () => {
+      const result = await put({ body: { displayName: 'Ana' } });
 
       expect(resultStatus(result)).toBe(200);
       expect(mockPutUser).toHaveBeenCalledWith(
-        expect.objectContaining({ displayName: 'User', discoverable: false })
+        expect.objectContaining({ userId: 'user-1', displayName: 'Ana', discoverable: false })
       );
     });
 
@@ -211,13 +245,14 @@ describe('rest-handler: PUT /users/{userId}/profile', () => {
     });
 
     it('keeps an explicit discoverable: false', async () => {
-      await put({ body: { discoverable: false } });
+      await put({ body: { displayName: 'Ana', discoverable: false } });
       expect(mockPutUser).toHaveBeenCalledWith(expect.objectContaining({ discoverable: false }));
     });
 
     it('ignores fields a client must not set (friend list, creation date, user id)', async () => {
       await put({
         body: {
+          displayName: 'Ana',
           userId: 'user-99',
           createdAt: '1999-01-01T00:00:00.000Z',
           friendIds: ['user-5'],
@@ -380,8 +415,9 @@ describe('rest-handler: GET /users/{userId}/profile-picture-upload-url', () => {
   });
 
   it('is not shadowed by the profile route', async () => {
-    await upload();
-    expect(mockGetUser).not.toHaveBeenCalled();
+    const body = resultJson(await upload());
+    expect(body).toHaveProperty('uploadUrl');
+    expect(body).not.toHaveProperty('displayName');
   });
 
   it('is only available through GET', async () => {

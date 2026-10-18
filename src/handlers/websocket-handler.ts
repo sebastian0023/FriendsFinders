@@ -7,6 +7,7 @@ import {
   getConnection,
   getConnectionsByUserId,
   getFriends,
+  getUser,
   updateConnectionLocation,
 } from '../utils/dynamo-client';
 import { postToConnection } from '../utils/apigw-client';
@@ -98,6 +99,11 @@ async function handleConnect(event: APIGatewayProxyEvent, connectionId: string):
   const userId = await verifyToken(token);
   if (!userId) {
     return { statusCode: 401, body: 'Unauthorized' };
+  }
+
+  // Nobody can use the app without a name, and sharing a location is part of using it.
+  if (!(await getUser(userId))) {
+    return { statusCode: 403, body: 'Profile required' };
   }
   const config = await getConfig();
   const now = new Date();
