@@ -15,6 +15,9 @@ This is an academic project: the architecture aims to be correct and well struct
 
 ## How it behaves
 
+### Accounts
+The web app has its own forms next to the Cognito sign-in page. **Create account** asks for a display name, email, password and the password again; the app checks that the two passwords match and follow the rule (at least 8 characters with a capital letter, a lowercase letter and a number) before anything is sent. Cognito then emails a code; entering it confirms the account and signs the user in, and the name they gave is already filled in on the name step. **Send a new code** is available on the code step. **Forgot password** emails a code, and entering it with a new password (typed twice) changes the password and signs the user in. Wrong or expired codes, an email that already has an account and Cognito being unreachable are each explained in plain words. If the automatic sign-in is refused, the user is sent back to sign in by hand.
+
 ### Having a name
 Nobody can use the app without a display name. After signing in, a user who has no profile is asked to choose a name before anything else is shown. Until they have one the server refuses every request except reading or creating their own profile (`403`), and the WebSocket refuses to connect (`403`). People are always shown by name, never by id and never as a placeholder, and anyone without a profile does not appear in friends, requests or nearby lists.
 

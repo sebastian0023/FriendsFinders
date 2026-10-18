@@ -88,7 +88,7 @@ The Connections table embeds location data (latitude, longitude, timestamp) alon
 
 ## 🔐 Authentication
 
-- **Web frontend:** OAuth 2.0 authorization code flow via the Cognito **hosted UI**. The browser redirects to the hosted UI to sign up / sign in, receives an authorization `code`, and exchanges it for a JWT `id_token`. The token is sent as `Authorization: Bearer <id_token>` on REST calls and as `?token=<id_token>` on WebSocket connect.
+- **Web frontend:** sign in through the Cognito **hosted UI** (OAuth 2.0 authorization code flow: the browser receives a `code` and exchanges it for a JWT `id_token`), or use the app's own **Create account** and **Forgot password** forms, which call Cognito directly (confirm with an emailed code, then sign in with `USER_PASSWORD_AUTH`). The token is sent as `Authorization: Bearer <id_token>` on REST calls and as `?token=<id_token>` on WebSocket connect.
 - **Mobile:** Direct auth via the Cognito SDK (`USER_SRP_AUTH` / `USER_PASSWORD_AUTH`) using a separate mobile client ID; identical token usage.
 - **Identity:** The Cognito `sub` claim (a stable UUID per user) is used as `userId` throughout the system. The WebSocket handler verifies the token manually via JWKS; the HTTP API uses API Gateway's built-in JWT authorizer.
 
@@ -269,7 +269,7 @@ Then add that role ARN as a GitHub Actions **repository variable** named `AWS_DE
 ## 🖥️ Using the App
 
 1. Open the `frontend_url` from `terraform output` in your browser.
-2. Click **Continue with Cognito** → sign up with email + password → confirm via email → sign in.
+2. Click **Create account** → enter a name, email and password (twice) → enter the code emailed to you → you are signed in. (**Continue with Cognito** is the hosted sign-in page; **Forgot password?** resets a password.)
 3. On the **Profile** tab, set a display name (optionally enable **Discoverable**) and **Save**.
 4. On the **Friends** tab, enter coordinates or click **Use GPS**, then **Connect**, then **Send**.
 5. Repeat with a second user in another browser / incognito window.
@@ -280,7 +280,7 @@ Then add that role ARN as a GitHub Actions **repository variable** named `AWS_DE
 
 ## 📐 Key Design Decisions
 
-- **Cognito for auth** — hosted UI on web, direct SDK flow on mobile; the `sub` claim is the userId.
+- **Cognito for auth** — own create-account / reset forms plus the hosted sign-in page on web, direct SDK flow on mobile; the `sub` claim is the userId.
 - **JWT verified at the edge** — HTTP API uses API Gateway's built-in JWT authorizer; WebSocket `$connect` verifies the token in-Lambda via JWKS (WebSocket APIs do not support JWT authorizers natively).
 - **3 consolidated Lambdas** — reduces cold starts, simplifies deployment, lowers cost; internal routing by routeKey or HTTP method+path.
 - **DynamoDB Streams for fan-out** — stream triggers on location writes, fanout-handler computes distances and pushes to friends.
