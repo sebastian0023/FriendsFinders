@@ -36,9 +36,10 @@ AWS SDK for JavaScript v3, modular clients only:
 
 ## Testing
 
-- Jest with ts-jest. Unit tests are in `tests/unit`, property tests in `tests/property`, shared helpers in `tests/helpers`
+- Jest with ts-jest. Unit tests are in `tests/unit`, property tests in `tests/property`, web app tests in `tests/frontend`, shared helpers in `tests/helpers`
 - fast-check for property-based tests (at least 100 runs per property)
 - AWS calls are never made in tests: the wrappers in `src/utils` are tested with `aws-sdk-client-mock`, and the handlers are tested with those wrappers replaced by `jest.mock()`
+- The web app is tested by opening the real `frontend/index.html` in `jsdom` (a simulated browser) with a fake API behind it; see `tests/helpers/page.ts`. `jsdom` is pinned to the 26 series because newer versions use ES modules that this Jest setup cannot load.
 
 ## Key Constants (configurable through SSM)
 
@@ -75,6 +76,7 @@ npm run build
 npm test
 npm run test:unit
 npm run test:property
+npm run test:frontend
 
 # Coverage
 npx jest --coverage
