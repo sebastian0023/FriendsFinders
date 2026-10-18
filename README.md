@@ -102,6 +102,7 @@ The Connections table embeds location data (latitude, longitude, timestamp) alon
 - AWS SDK v3 modular (`@aws-sdk/client-dynamodb`, `@aws-sdk/lib-dynamodb`, `@aws-sdk/client-apigatewaymanagementapi`, `@aws-sdk/client-s3`, `@aws-sdk/s3-request-presigner`, `@aws-sdk/client-ssm`)
 - `jsonwebtoken` + `jwks-rsa` (WebSocket JWT verification)
 - `esbuild` for Lambda bundling
+- Jest + ts-jest, `fast-check` (property tests) and `aws-sdk-client-mock` for testing
 
 **Frontend**
 
@@ -127,6 +128,7 @@ The Connections table embeds location data (latitude, longitude, timestamp) alon
 │   └── index.html                  # Entire web app — HTML + CSS + JS, deployed as-is
 ├── terraform/
 │   ├── main.tf                     # incl. S3 remote-state backend block
+│   ├── backend.hcl.example         # per-account state bucket name (copy to backend.hcl)
 │   ├── cicd.tf                     # GitHub OIDC provider + CI deploy role
 │   ├── variables.tf, outputs.tf
 │   └── modules/
@@ -141,25 +143,31 @@ The Connections table embeds location data (latitude, longitude, timestamp) alon
 │   │   └── fanout-handler.ts       # DynamoDB Streams → push to friends
 │   ├── utils/
 │   │   ├── distance.ts             # Haversine formula
-│   │   ├── validation.ts           # Coordinate validation
-│   │   ├── dynamo-client.ts        # DynamoDB typed wrappers
+│   │   ├── geo-cells.ts            # 0.1° grid squares behind the nearby-strangers index
+│   │   ├── validation.ts           # Location update validation
+│   │   ├── profile-validation.ts   # Profile update validation
+│   │   ├── dynamo-client.ts        # DynamoDB wrappers (incl. transactional friendships)
 │   │   ├── apigw-client.ts         # API Gateway Management API
 │   │   ├── s3-client.ts            # S3 pre-signed URL helpers
-│   │   ├── config.ts               # SSM parameter loader
+│   │   ├── config.ts               # SSM parameter loader (cached, validated)
 │   │   └── message-utils.ts        # WebSocket message builders/parsers
 │   └── types/index.ts              # Shared TypeScript interfaces
+├── tests/
+│   ├── unit/                       # Handler and wrapper tests (AWS is always mocked)
+│   ├── property/                   # fast-check property tests
+│   └── helpers/                    # Shared test builders
 ├── scripts/
 │   ├── build.js                    # esbuild bundler → dist/<handler>.zip
 │   └── bootstrap-tf-backend.sh     # one-time: create TF remote-state bucket + lock
-├── docs/                           # Architecture and product documentation
-│   ├── product.md
-│   ├── tech.md
-│   ├── structure.md
-│   └── specs/
+├── docs/                           # Product and technology documentation
+│   ├── product.md                  # What the app does and its API
+│   ├── tech.md                     # Stack, settings and commands
+│   └── specs/                      # Earlier design documents (being replaced)
 ├── generated-diagrams/             # Architecture diagrams (PNG + draw.io)
 ├── dist/                           # Generated Lambda bundles + zips
 ├── package.json                    # Backend
 ├── tsconfig.json
+├── jest.config.ts
 └── README.md
 ```
 
@@ -195,6 +203,26 @@ terraform output frontend_url
 The Terraform `frontend-deploy` module uploads `frontend/index.html` to S3 and injects runtime config (Cognito IDs, API endpoints) into the page so it can talk to the deployed backend. The frontend has no build step — the file is deployed as-is.
 
 > **First-time deploy:** Terraform state is stored remotely (S3 + DynamoDB lock), so a fresh `terraform init` needs the state backend to exist first. See **Deployment & CI/CD** below for the one-time bootstrap.
+
+---
+
+## 🧪 Testing
+
+```bash
+npm test                 # everything
+npm run test:unit        # handlers and wrappers
+npm run test:property    # fast-check property tests
+npx jest --coverage      # with a coverage report
+npm run type-check       # types, including the tests
+```
+
+AWS is never called from a test:
+
+- **Handlers** are tested with their wrappers (`dynamo-client`, `apigw-client`, `config`, `s3-client`) replaced by `jest.mock()`.
+- **Wrappers** are tested with `aws-sdk-client-mock`, asserting the exact requests they send. The S3 tests run the real presigner offline with fake credentials, and the WebSocket tests sign real JWTs with a throwaway key.
+- **Property tests** (100+ runs each) cover the pure logic: Haversine, validation, message round-trips, the geo grid and profile validation. The grid has a test that every point inside the radius falls in a square that gets queried.
+
+The tests are the executable description of how the system behaves: when a route or a rule changes, change its test with it.
 
 ---
 
@@ -259,9 +287,24 @@ Then add that role ARN as a GitHub Actions **repository variable** named `AWS_DE
 - **S3 pre-signed URLs** — clients upload profile pictures directly to S3, avoiding Lambda payload limits.
 - **Haversine formula** — straight-line great-circle distance; no routing APIs.
 - **Tile-free map** — the Map tab is a client-side `<canvas>` radar (friends by distance + bearing); no external map/tile service, so the app stays fully serverless.
-- **Bidirectional friendship records** — O(1) lookup in both directions.
+- **Friendships in their own table** — one item per direction, so a friendship is two small rows created or removed together in one DynamoDB transaction. Profile reads stay small, there is no per-user size limit, and concurrent changes cannot overwrite each other.
+- **Grid index for nearby strangers** — each connection stores the 0.1° grid square it is in (`geoCell`), and a search queries only the few squares that can contain someone within the radius instead of scanning the table.
 - **Friend requests only** — friends are added exclusively through the request/accept flow.
 - **Terraform only** — declarative infrastructure, no CDK/SAM/Serverless Framework.
+
+---
+
+## 🗺️ Roadmap
+
+Known gaps and ideas, roughly by value:
+
+- **CI checks** — the workflow only builds and applies on `main`. Add `type-check`, `npm test` and a pull-request trigger, plus a `terraform plan` job so changes are reviewed before they are applied.
+- **Coverage threshold** in `jest.config.ts`, once CI runs the tests.
+- **First friends message** — `$connect` sends `init.response` before the connection is fully established, so it may not be delivered. Confirm the web app recovers through `friends.refresh`, or send the first snapshot after the first `location.update`.
+- **Upload size limit** — the upload URL enforces the image type but not the file size; a presigned POST with a size condition would.
+- **Friend limit** — checked before the transaction, so two simultaneous accepts could take someone one over the limit. A per-user counter inside the transaction would make it exact.
+- **Very dense areas** — every user in one 7-mile grid square shares an index partition; split a square across several keys if one ever gets very busy.
+- **Account deletion and blocking** — the `friendId-index` on Friendships already finds everyone who lists a user as a friend.
 
 ---
 
