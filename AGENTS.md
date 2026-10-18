@@ -69,8 +69,20 @@ npm test             # Run Jest
 npm run test:unit    # Unit tests
 npm run test:property # Property tests (fast-check)
 
-# Terraform
-cd terraform && terraform init
+# Terraform (copy terraform/backend.hcl.example to backend.hcl and set your state bucket first)
+cd terraform && terraform init -backend-config=backend.hcl
 terraform plan
 terraform apply
 ```
+
+---
+
+## 🤝 How We Work
+
+- **Plan before building.** For anything non-trivial, write down the options and their trade-offs and agree on one before coding.
+- **Tests first.** Start with a failing test that describes the behaviour, then make it pass. For important logic, break the code on purpose to check that the tests notice.
+- **Definition of done.** `npm run type-check`, `npm test` and `npm run build` all pass, and the docs that describe the changed behaviour are updated in the same change.
+- **One change per branch.** Never work directly on `develop` or `main`. Open a pull request per change, merge them one at a time, and keep commits small and focused.
+- **The tests describe the behaviour.** There are no separate requirement or task documents, because requirements change. Change the test and the code together.
+- **Keep docs short and derived from the code.** Do not copy interfaces or signatures into documents; link to the source. `docs/product.md` covers behaviour and the API, `docs/tech.md` the stack and commands.
+- **Record design decisions.** When you choose between designs, add a line (what, why, what it replaces) to "Key Design Decisions" in the README.
