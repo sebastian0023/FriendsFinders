@@ -180,6 +180,7 @@ module "frontend_deploy" {
   cognito_web_client_id      = module.cognito.web_client_id
   http_api_endpoint          = module.api_gateway.http_api_endpoint
   websocket_api_endpoint     = local.websocket_api_endpoint
+  aws_region                 = var.aws_region
 }
 
 # --- Monitoring ---
