@@ -10,6 +10,7 @@ jest.mock('../../src/utils/dynamo-client', () => ({
   getConnection: jest.fn(),
   getConnectionsByUserId: jest.fn(),
   getFriends: jest.fn(),
+  getUser: jest.fn(),
   updateConnectionLocation: jest.fn(),
 }));
 jest.mock('../../src/utils/apigw-client', () => ({ postToConnection: jest.fn() }));
@@ -30,6 +31,7 @@ import {
   getConnection,
   getConnectionsByUserId,
   getFriends,
+  getUser,
   updateConnectionLocation,
 } from '../../src/utils/dynamo-client';
 import { postToConnection } from '../../src/utils/apigw-client';
@@ -41,6 +43,7 @@ const mockDeleteConnection = deleteConnection as jest.MockedFunction<typeof dele
 const mockGetConnection = getConnection as jest.MockedFunction<typeof getConnection>;
 const mockGetConnections = getConnectionsByUserId as jest.MockedFunction<typeof getConnectionsByUserId>;
 const mockGetFriends = getFriends as jest.MockedFunction<typeof getFriends>;
+const mockGetUser = getUser as jest.MockedFunction<typeof getUser>;
 const mockUpdateLocation = updateConnectionLocation as jest.MockedFunction<typeof updateConnectionLocation>;
 const mockPost = postToConnection as jest.MockedFunction<typeof postToConnection>;
 const mockGetConfig = getConfig as jest.MockedFunction<typeof getConfig>;
@@ -138,6 +141,13 @@ beforeEach(() => {
   // clearMocks resets call history but keeps implementations, so set safe defaults every time.
   mockGetConfig.mockResolvedValue(CONFIG);
   mockGetFriends.mockResolvedValue([]);
+  // By default everyone who connects has a profile, which carries their name.
+  mockGetUser.mockImplementation(async (id: string) => ({
+    userId: id,
+    displayName: 'Ana',
+    discoverable: false,
+    createdAt: '2026-01-01T00:00:00.000Z',
+  }));
   mockGetConnections.mockResolvedValue([]);
   mockGetConnection.mockResolvedValue(undefined);
   mockPutConnection.mockResolvedValue(undefined);
@@ -217,6 +227,49 @@ describe('websocket-handler: $connect authentication', () => {
     const token = signToken({ sub: 'user-1', token_use: tokenUse, client_id: 'any-client' });
     const result = await handler(wsEvent('$connect', { token }));
     expect(result.statusCode).toBe(200);
+  });
+});
+
+// Nobody can use the app without a name, and sharing a location is part of using it.
+describe('websocket-handler: $connect requires a profile', () => {
+  it('refuses a user who has no profile, and stores nothing', async () => {
+    mockGetUser.mockResolvedValue(undefined);
+
+    const result = await handler(wsEvent('$connect', { token: validToken('user-1') }));
+
+    expect(result).toEqual({ statusCode: 403, body: 'Profile required' });
+    expect(mockGetUser).toHaveBeenCalledWith('user-1');
+    expect(mockPutConnection).not.toHaveBeenCalled();
+    expect(mockGetFriends).not.toHaveBeenCalled();
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('accepts a user who has a profile', async () => {
+    const result = await handler(wsEvent('$connect', { token: validToken('user-1') }));
+
+    expect(result).toEqual({ statusCode: 200, body: 'Connected' });
+    expect(mockGetUser).toHaveBeenCalledWith('user-1');
+  });
+
+  it('checks the profile of the token subject, not of anyone else', async () => {
+    await handler(wsEvent('$connect', { token: validToken('user-42') }));
+
+    expect(mockGetUser).toHaveBeenCalledTimes(1);
+    expect(mockGetUser).toHaveBeenCalledWith('user-42');
+  });
+
+  it('does not look anyone up for a request that is not authenticated (401, not 403)', async () => {
+    const result = await handler(wsEvent('$connect', { token: 'not-a-jwt' }));
+
+    expect(result).toEqual({ statusCode: 401, body: 'Unauthorized' });
+    expect(mockGetUser).not.toHaveBeenCalled();
+  });
+
+  it('does not store the connection when the profile lookup fails', async () => {
+    mockGetUser.mockRejectedValue(new Error('DynamoDB unavailable'));
+
+    await expect(handler(wsEvent('$connect', { token: validToken('user-1') }))).rejects.toThrow('DynamoDB unavailable');
+    expect(mockPutConnection).not.toHaveBeenCalled();
   });
 });
 

@@ -377,7 +377,13 @@
       line-height: 1.55;
       margin-bottom: 24px;
     }
-    .auth-card #btn-login {
+    .auth-card input[type="text"] {
+      width: 100%;
+      box-sizing: border-box;
+      margin: 6px 0 14px;
+    }
+    .auth-card #btn-login,
+    .auth-card #btn-save-first-name {
       width: 100%;
       padding: 12px 16px;
       font-size: 13.5px;
@@ -660,6 +666,17 @@
     <p class="auth-footnote">Location data is only shared with friends you've approved.</p>
   </div>
 
+  <!-- ── CHOOSE A NAME (signed in, but no profile yet) ───────────── -->
+  <div id="section-name" class="card auth-card hidden">
+    <div class="auth-brand">FriendsFinders</div>
+    <h1>Choose your name</h1>
+    <p class="auth-tagline">This is how your friends and people nearby will see you. You need a name to use the app.</p>
+    <label for="input-first-name">Display name</label>
+    <input id="input-first-name" type="text" maxlength="50" placeholder="Your name" autocomplete="nickname" />
+    <button id="btn-save-first-name">Continue</button>
+    <p class="status" id="first-name-status"></p>
+  </div>
+
   <!-- ── TABS (logged in only) ──────────────────────────────────── -->
   <div id="tabs-container" class="hidden">
 
@@ -882,6 +899,8 @@ async function api(method, path, body) {
 let ws = null;
 let nearbyFriends = {};
 let friendNames = {}; // friendId -> displayName
+let namesLoadedAt = 0;        // when the names were last fetched (ms)
+let refreshingNames = null;   // the fetch in flight, so many entries ask for one reload
 
 const SENT_FRIEND_REQUESTS_KEY = 'ff_sent_friend_requests';
 
@@ -998,10 +1017,12 @@ function displayFriendDistanceMiles(f) {
 
 function renderFriends() {
   const list = document.getElementById('friends-list');
-  const entries = Object.values(nearbyFriends);
+  const all = Object.values(nearbyFriends);
+  ensureNames(all.map((f) => f.friendId));
+  const entries = all.filter((f) => nameOf(f.friendId));
   if (!entries.length) { list.innerHTML = '<p class="status">No nearby friends yet.</p>'; return; }
   list.innerHTML = entries.map(f => {
-    const name = friendNames[f.friendId] || f.friendId;
+    const name = nameOf(f.friendId);
     return `<div class="friend-item">
       <span class="avatar">${initialOf(name)}</span>
       <div class="meta">
@@ -1055,7 +1076,9 @@ function renderMap() {
   // Friends with live coordinates → distance + bearing from the user.
   const placed = [];
   let offlineCount = 0;
-  Object.values(nearbyFriends).forEach((f) => {
+  const known = Object.values(nearbyFriends);
+  ensureNames(known.map((f) => f.friendId));
+  known.filter((f) => nameOf(f.friendId)).forEach((f) => {
     if (f.latitude == null || f.longitude == null) { offlineCount++; return; }
     placed.push({
       friendId: f.friendId,
@@ -1120,7 +1143,7 @@ function renderMap() {
     ctx.fill();
     ctx.stroke();
 
-    const name = friendNames[p.friendId] || p.friendId;
+    const name = nameOf(p.friendId);
     ctx.fillStyle = '#0f4c4a';
     ctx.font = '600 13px Inter, sans-serif';
     ctx.textAlign = 'center';
@@ -1149,7 +1172,8 @@ function renderMap() {
 
 function showMapPopup(hit) {
   const popup = document.getElementById('map-popup');
-  const name = friendNames[hit.friendId] || hit.friendId;
+  const name = nameOf(hit.friendId);
+  if (!name) return;
   const updated = hit.lastUpdated ? new Date(hit.lastUpdated).toLocaleTimeString() : '—';
   popup.innerHTML =
     `<div class="mp-name"><span>${escapeHtml(name)}</span>` +
@@ -1180,6 +1204,30 @@ async function loadFriendNames() {
   } catch (e) {
     log('Could not load friend names: ' + e.message);
   }
+  namesLoadedAt = Date.now();
+}
+
+// A person is only ever shown by name, never by id and never as a placeholder. When a name has not
+// loaded yet (for example a friend who accepted after this page opened) the entry stays hidden,
+// the names are reloaded, and the entry appears as soon as its name is known.
+function nameOf(id) { return friendNames[id]; }
+
+function ensureNames(ids) {
+  const missing = ids.some((id) => friendNames[id] === undefined);
+  // At most one reload at a time, and not more than once every 10 seconds if a name stays unknown.
+  if (!missing || refreshingNames || Date.now() - namesLoadedAt < 10000) return;
+  refreshingNames = loadFriendNames().finally(() => {
+    refreshingNames = null;
+    renderFriends();
+    renderMap();
+  });
+}
+
+// The api() helper reports a failure as "<status>: <body>"; show just the server's reason.
+function errorMessage(e) {
+  const match = /^\d+: ([\s\S]*)$/.exec((e && e.message) || '');
+  if (!match) return (e && e.message) || 'Something went wrong.';
+  try { return JSON.parse(match[1]).error || match[1]; } catch { return match[1]; }
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -1266,6 +1314,44 @@ function sendLocation() {
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
+// The caller's own profile, or null when they have not created one yet (the server answers 404).
+async function loadProfile(claims) {
+  try {
+    return await api('GET', `/users/${claims.sub}/profile`);
+  } catch (e) {
+    if (/^404\b/.test((e && e.message) || '')) return null;
+    throw e;
+  }
+}
+
+// Shows the "choose your name" step and resolves with the profile once it has been created.
+function askForDisplayName(claims) {
+  return new Promise((resolve) => {
+    const input = document.getElementById('input-first-name');
+    const button = document.getElementById('btn-save-first-name');
+    input.value = (claims && claims.name) || ''; // already known when it was given at sign-up
+    setStatus('first-name-status', '');
+    show('section-name');
+    input.focus();
+
+    const submit = async () => {
+      const name = input.value.trim();
+      if (!name) { setStatus('first-name-status', 'Please enter a name.', false); return; }
+      button.disabled = true;
+      try {
+        await api('PUT', `/users/${claims.sub}/profile`, { displayName: name, discoverable: false });
+        hide('section-name');
+        resolve({ userId: claims.sub, displayName: name, discoverable: false });
+      } catch (e) {
+        setStatus('first-name-status', errorMessage(e), false);
+        button.disabled = false;
+      }
+    };
+    button.onclick = submit;
+    input.onkeydown = (ev) => { if (ev.key === 'Enter') submit(); };
+  });
+}
+
 async function init() {
   const params = new URLSearchParams(window.location.search);
   const code = params.get('code');
@@ -1282,17 +1368,25 @@ async function init() {
   const tokens = getTokens();
   if (tokens) {
     const claims = parseJwt(tokens.id_token);
-    setStatus('auth-status', `Signed in as ${claims?.email || claims?.sub}`, true);
     hide('section-auth');
+
+    // Nobody can use the app without a name: the server refuses everything until a profile exists,
+    // so a signed-in user without one is asked for a name before anything else is shown.
+    let profile;
+    try {
+      profile = await loadProfile(claims);
+    } catch (e) {
+      show('section-auth');
+      alert('Could not load your profile: ' + errorMessage(e));
+      return;
+    }
+    if (!profile) profile = await askForDisplayName(claims);
+
+    setStatus('auth-status', `Signed in as ${claims?.email || claims?.sub}`, true);
+    document.getElementById('input-name').value = profile.displayName || '';
+    document.getElementById('input-discoverable').checked = !!profile.discoverable;
     show('tabs-container', 'tab-nav');
     document.body.classList.add('authenticated');
-
-    // Load profile and friend names
-    try {
-      const profile = await api('GET', `/users/${claims.sub}/profile`);
-      document.getElementById('input-name').value = profile.displayName || '';
-      document.getElementById('input-discoverable').checked = !!profile.discoverable;
-    } catch { /* new user */ }
 
     await loadFriendNames();
   }
@@ -1333,15 +1427,17 @@ document.getElementById('btn-logout').onclick = () => {
 document.getElementById('btn-save-profile').onclick = async () => {
   const tokens = getTokens();
   const claims = parseJwt(tokens.id_token);
+  const name = document.getElementById('input-name').value.trim();
+  if (!name) { setStatus('profile-status', 'Your name cannot be empty.', false); return; }
   const body = {
-    displayName: document.getElementById('input-name').value,
+    displayName: name,
     discoverable: document.getElementById('input-discoverable').checked,
   };
   try {
     await api('PUT', `/users/${claims.sub}/profile`, body);
     setStatus('profile-status', 'Saved', true);
   } catch (e) {
-    setStatus('profile-status', e.message, false);
+    setStatus('profile-status', errorMessage(e), false);
   }
 };
 
@@ -1451,9 +1547,9 @@ document.getElementById('btn-refresh-requests').onclick = async () => {
     if (!list.length) { el.innerHTML = '<p class="status">No pending requests.</p>'; return; }
     el.innerHTML = list.map(r =>
       `<div class="friend-item">
-        <span class="avatar">${initialOf(r.fromDisplayName || r.fromUserId)}</span>
+        <span class="avatar">${initialOf(r.fromDisplayName)}</span>
         <div class="meta">
-          <span class="name">${escapeHtml(r.fromDisplayName || r.fromUserId)}</span>
+          <span class="name">${escapeHtml(r.fromDisplayName)}</span>
           <span class="sub">Wants to connect</span>
         </div>
         <div class="actions">

@@ -17,7 +17,7 @@ Every dependency is reached over public AWS endpoints with IAM authentication, a
 ## Main flows
 
 ### Connecting
-1. The client opens the WebSocket with its Cognito token in `?token=`. WebSocket APIs have no built-in JWT authorizer, so `$connect` verifies the token itself against the user pool's public keys (RS256 only, signature and expiry checked) and takes the user id from `sub`.
+1. The client opens the WebSocket with its Cognito token in `?token=`. WebSocket APIs have no built-in JWT authorizer, so `$connect` verifies the token itself against the user pool's public keys (RS256 only, signature and expiry checked) and takes the user id from `sub`. It then checks that the user has a profile and refuses the connection (`403`) if not.
 2. The connection is stored in the **Connections** table with an `expiresAt` of now plus the inactivity TTL.
 3. The handler loads the user's friends, looks up each friend's live connections, and takes the first one that has a location. It measures that against the caller's most recently updated located connection. Friends inside the radius go into an `init.response` sent to the new connection. A caller with no location yet gets all located friends at distance `0`.
 4. `friends.refresh` repeats step 3 on demand.
@@ -70,11 +70,13 @@ The TypeScript shapes are in `src/types/index.ts`; this document deliberately do
 | A table read has more than 1 MB of results | Every list query follows the pages, except the fallback scan, which stops at its cap |
 | Unexpected error in a REST route | A JSON `500` with a generic message; the detail is logged |
 | Invalid JSON or an invalid field in a request | `400` with the reason, before anything is written |
+| A caller with no profile (no name) | `403` on every REST route except their own profile, and the WebSocket refuses to connect |
 
 ## Security
 
 - **Authentication:** Cognito issues the tokens. The HTTP API's JWT authorizer checks them and passes the verified claims to the handler. The WebSocket handler checks them itself, as above.
 - **Authorisation:** users can only edit their own profile and upload URL (`403` otherwise); only the recipient can accept or decline a request.
+- **Everyone has a name:** the server refuses every request (and the WebSocket) from a user with no profile, apart from reading or creating their own profile, and creating one requires a display name. The web app asks for the name right after sign-in.
 - **Privacy:** strangers get a distance and a name, never coordinates; a profile read exposes only public fields; discoverability is opt-in and independent of sharing location with friends.
 - **Input:** location updates and profile updates are validated; unknown fields in a profile update are ignored, so a client cannot set anything it should not.
 - **Least privilege:** the three roles differ. For example the WebSocket and fan-out roles can only `Query` the Friendships table, while the REST role can also read single items and create or delete them.
@@ -98,6 +100,7 @@ Each entry says what was chosen, why, and what it replaced.
 - **Friendships in their own table.** Two small items per friendship instead of two lists on the Users items. Profile reads stay small, there is no per-user size ceiling (an item is capped at 400 KB), and concurrent changes cannot overwrite each other. Replaced friend lists embedded in the Users item.
 - **Transactions for accepting and removing.** The two directions and the request change together, so there is no half-made friendship and no double accept. Replaced several separate writes.
 - **A grid index for nearby strangers.** A fixed 0.1° grid with a sparse index that the maths can cover exactly, and no extra dependency. Replaced a table scan. A geohash library or H3 would also work; the grid was chosen for being simple to reason about and to test.
+- **A name is required to use the app.** Enforced by the server, not just the screens: every route except the caller's own profile, and `$connect`, checks that the profile exists, and a profile cannot be created without a display name. Anyone without a profile is also left out of friends, requests and nearby lists, so no one is ever shown by id or as a placeholder. Replaced profiles that were optional, created only when someone saved the Profile tab, with a `"User"` fallback and raw ids on screen.
 - **Friends only through requests.** There is no direct "add friend" route. Replaced the original design's immediate add.
 - **Strangers at their nearest device.** For a stranger, being near is what matters, so a person is listed once if any of their devices is in range, at the closest distance. `/nearby-friends` locates a friend by their most recent update instead. The WebSocket snapshot and `/nearby-friends` still pick among a user's several devices differently (see the Roadmap).
 - **Settings in SSM, cached for 5 minutes.** They can be changed without a deploy, and a change reaches every warm Lambda within a few minutes. A bad or missing value never breaks a request.
