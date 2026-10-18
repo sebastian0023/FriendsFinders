@@ -84,5 +84,5 @@ terraform apply
 - **Definition of done.** `npm run type-check`, `npm test` and `npm run build` all pass, and the docs that describe the changed behaviour are updated in the same change.
 - **One change per branch.** Never work directly on `develop` or `main`. Open a pull request per change, merge them one at a time, and keep commits small and focused.
 - **The tests describe the behaviour.** There are no separate requirement or task documents, because requirements change. Change the test and the code together.
-- **Keep docs short and derived from the code.** Do not copy interfaces or signatures into documents; link to the source. `docs/product.md` covers behaviour and the API, `docs/tech.md` the stack and commands.
-- **Record design decisions.** When you choose between designs, add a line (what, why, what it replaces) to "Key Design Decisions" in the README.
+- **Keep docs short and derived from the code.** Do not copy interfaces or signatures into documents; link to the source. `docs/product.md` covers behaviour and the API, `docs/tech.md` the stack and commands, and `docs/architecture.md` how it is built and why.
+- **Record design decisions.** When you choose between designs, add an entry (what, why, what it replaces) to "Decisions" in `docs/architecture.md`, and a one-line summary to "Key Design Decisions" in the README if it is a headline choice.

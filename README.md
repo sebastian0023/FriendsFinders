@@ -159,10 +159,10 @@ The Connections table embeds location data (latitude, longitude, timestamp) alon
 ├── scripts/
 │   ├── build.js                    # esbuild bundler → dist/<handler>.zip
 │   └── bootstrap-tf-backend.sh     # one-time: create TF remote-state bucket + lock
-├── docs/                           # Product and technology documentation
+├── docs/                           # Product, technology and architecture documentation
 │   ├── product.md                  # What the app does and its API
 │   ├── tech.md                     # Stack, settings and commands
-│   └── specs/                      # Earlier design documents (being replaced)
+│   └── architecture.md             # How it is built, failure handling and design decisions
 ├── generated-diagrams/             # Architecture diagrams (PNG + draw.io)
 ├── dist/                           # Generated Lambda bundles + zips
 ├── package.json                    # Backend
@@ -292,6 +292,8 @@ Then add that role ARN as a GitHub Actions **repository variable** named `AWS_DE
 - **Friend requests only** — friends are added exclusively through the request/accept flow.
 - **Terraform only** — declarative infrastructure, no CDK/SAM/Serverless Framework.
 
+This is a summary. The reasoning, and what each decision replaced, is in [`docs/architecture.md`](docs/architecture.md#decisions).
+
 ---
 
 ## 🗺️ Roadmap
@@ -301,6 +303,7 @@ Known gaps and ideas, roughly by value:
 - **CI checks** — the workflow only builds and applies on `main`. Add `type-check`, `npm test` and a pull-request trigger, plus a `terraform plan` job so changes are reviewed before they are applied.
 - **Coverage threshold** in `jest.config.ts`, once CI runs the tests.
 - **First friends message** — `$connect` sends `init.response` before the connection is fully established, so it may not be delivered. Confirm the web app recovers through `friends.refresh`, or send the first snapshot after the first `location.update`.
+- **One rule for several devices** — the WebSocket snapshot takes a friend's first located connection and the caller's latest, while `/nearby-friends` takes a friend's latest and the caller's first. Pick one rule (most recent update) and use it in both.
 - **Upload size limit** — the upload URL enforces the image type but not the file size; a presigned POST with a size condition would.
 - **Friend limit** — checked before the transaction, so two simultaneous accepts could take someone one over the limit. A per-user counter inside the transaction would make it exact.
 - **Very dense areas** — every user in one 7-mile grid square shares an index partition; split a square across several keys if one ever gets very busy.
