@@ -1,4 +1,4 @@
-<mxfile host="app.diagrams.net" modified="2026-09-27T23:08:00.000Z" agent="Antigravity" version="24.0.0" type="device">
+<mxfile host="app.diagrams.net" modified="2026-10-18T12:00:00.000Z" agent="Antigravity" version="24.0.0" type="device">
   <diagram id="nearby-friends-aws-standard" name="Nearby Friends — AWS Reference Architecture">
     <mxGraphModel dx="1800" dy="1200" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1820" pageHeight="1180" background="#FFFFFF" math="0" shadow="0">
       <root>
@@ -29,7 +29,7 @@
         <mxCell id="icon_browser" value="" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.client;fillColor=#D9A741;strokeColor=#ffffff;outlineConnect=0;" vertex="1" parent="1">
           <mxGeometry x="90" y="180" width="60" height="60" as="geometry"/>
         </mxCell>
-        <mxCell id="label_browser" value="&lt;b style=&quot;font-size: 12px; color: #232F3E;&quot;&gt;Web Browser&lt;/b&gt;&lt;br/&gt;&lt;span style=&quot;font-size: 10px; color: #64748B;&quot;&gt;Single-Page App&lt;br/&gt;Canvas Radar Map&lt;br/&gt;Geolocation API&lt;/span&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;" vertex="1" parent="1">
+        <mxCell id="label_browser" value="&lt;b style=&quot;font-size: 12px; color: #232F3E;&quot;&gt;Web Browser&lt;/b&gt;&lt;br/&gt;&lt;span style=&quot;font-size: 10px; color: #64748B;&quot;&gt;Single-Page App&lt;br/&gt;Canvas Radar Map&lt;br/&gt;Own sign-up &amp;amp; reset forms&lt;/span&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;" vertex="1" parent="1">
           <mxGeometry x="40" y="245" width="160" height="60" as="geometry"/>
         </mxCell>
 
@@ -133,16 +133,24 @@
         <mxCell id="icon_ddb_users" value="" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fillColor=#C925D1;strokeColor=#ffffff;outlineConnect=0;" vertex="1" parent="1">
           <mxGeometry x="1060" y="240" width="55" height="55" as="geometry"/>
         </mxCell>
-        <mxCell id="label_ddb_users" value="&lt;b style=&quot;font-size: 12px; color: #232F3E;&quot;&gt;Users Table&lt;/b&gt;&lt;br/&gt;&lt;span style=&quot;font-size: 10px; color: #64748B;&quot;&gt;PK: userId (UUID)&lt;br/&gt;displayName, discoverable&lt;br/&gt;&lt;b style=&quot;color: #7C3AED;&quot;&gt;friendIds[ ] + friendshipDates{ }&lt;/b&gt;&lt;/span&gt;&lt;br/&gt;&lt;b style=&quot;color: #16A34A; font-size: 10px;&quot;&gt;💰 On-Demand Pay-per-req&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;" vertex="1" parent="1">
-          <mxGeometry x="1125" y="225" width="210" height="75" as="geometry"/>
+        <mxCell id="label_ddb_users" value="&lt;b style=&quot;font-size: 12px; color: #232F3E;&quot;&gt;Users Table&lt;/b&gt;&lt;br/&gt;&lt;span style=&quot;font-size: 10px; color: #64748B;&quot;&gt;PK: userId (UUID)&lt;br/&gt;displayName, discoverable&lt;br/&gt;profilePictureKey, createdAt&lt;br/&gt;&lt;b style=&quot;color: #7C3AED;&quot;&gt;A name is required to use the app&lt;/b&gt;&lt;/span&gt;&lt;br/&gt;&lt;b style=&quot;color: #16A34A; font-size: 10px;&quot;&gt;💰 On-Demand Pay-per-req&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1125" y="220" width="230" height="85" as="geometry"/>
         </mxCell>
 
         <!-- Connections Table (Streams + TTL) -->
         <mxCell id="icon_ddb_connections" value="" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fillColor=#C925D1;strokeColor=#ffffff;outlineConnect=0;" vertex="1" parent="1">
           <mxGeometry x="1060" y="340" width="55" height="55" as="geometry"/>
         </mxCell>
-        <mxCell id="label_ddb_connections" value="&lt;b style=&quot;font-size: 12px; color: #232F3E;&quot;&gt;Connections Table (Streams + TTL)&lt;/b&gt;&lt;br/&gt;&lt;span style=&quot;font-size: 10px; color: #64748B;&quot;&gt;PK: connectionId | GSI: userId-index&lt;br/&gt;Embedded lat/lng &amp;bull; TTL: 10 min&lt;br/&gt;&lt;b style=&quot;color: #DC2626;&quot;&gt;Streams: NEW_AND_OLD_IMAGES&lt;/b&gt;&lt;/span&gt;&lt;br/&gt;&lt;b style=&quot;color: #16A34A; font-size: 10px;&quot;&gt;💰 Replaces Redis (Saves ~$13–$50/mo)&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;" vertex="1" parent="1">
-          <mxGeometry x="1125" y="330" width="225" height="80" as="geometry"/>
+        <mxCell id="label_ddb_connections" value="&lt;b style=&quot;font-size: 12px; color: #232F3E;&quot;&gt;Connections Table (Streams + TTL)&lt;/b&gt;&lt;br/&gt;&lt;span style=&quot;font-size: 10px; color: #64748B;&quot;&gt;PK: connectionId | GSIs: userId, geoCell&lt;br/&gt;Embedded lat/lng + geoCell (0.1&amp;deg; grid) &amp;bull; TTL: 10 min&lt;br/&gt;&lt;b style=&quot;color: #DC2626;&quot;&gt;Streams: NEW_AND_OLD_IMAGES&lt;/b&gt;&lt;/span&gt;&lt;br/&gt;&lt;b style=&quot;color: #16A34A; font-size: 10px;&quot;&gt;💰 Replaces Redis (Saves ~$13–$50/mo)&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1125" y="325" width="260" height="90" as="geometry"/>
+        </mxCell>
+
+        <!-- Friendships Table -->
+        <mxCell id="icon_ddb_friendships" value="" style="shape=mxgraph.aws4.resourceIcon;resIcon=mxgraph.aws4.dynamodb;fillColor=#C925D1;strokeColor=#ffffff;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="1060" y="560" width="55" height="55" as="geometry"/>
+        </mxCell>
+        <mxCell id="label_ddb_friendships" value="&lt;b style=&quot;font-size: 12px; color: #232F3E;&quot;&gt;Friendships Table&lt;/b&gt;&lt;br/&gt;&lt;span style=&quot;font-size: 10px; color: #64748B;&quot;&gt;PK: userId | SK: friendId&lt;br/&gt;GSI: friendId-index&lt;br/&gt;&lt;b style=&quot;color: #7C3AED;&quot;&gt;One item per direction, written in one transaction&lt;/b&gt;&lt;/span&gt;&lt;br/&gt;&lt;b style=&quot;color: #16A34A; font-size: 10px;&quot;&gt;💰 On-Demand Pay-per-req&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1125" y="540" width="260" height="95" as="geometry"/>
         </mxCell>
 
         <!-- FriendRequests Table -->
@@ -213,7 +221,7 @@
         </mxCell>
 
         <!-- Left Card: Itemized Breakdown -->
-        <mxCell id="finops_itemized" value="&lt;b style=&quot;font-size: 12px; color: #1E293B;&quot;&gt;Itemized Pay-As-You-Go Monthly Breakdown&lt;/b&gt;&lt;br/&gt;&lt;br/&gt;&lt;div style=&quot;font-size: 11px; line-height: 1.6; color: #334155;&quot;&gt;&lt;b style=&quot;color: #ED7100;&quot;&gt;⚡ AWS Lambda (3 Handlers):&lt;/b&gt; 256 MB RAM, pay-per-invocation &amp;bull; &lt;b style=&quot;color: #16A34A;&quot;&gt;~$1.00 – $3.00&lt;/b&gt;&lt;br/&gt;&lt;b style=&quot;color: #C925D1;&quot;&gt;🗄️ DynamoDB (3 Tables):&lt;/b&gt; On-Demand R/W + TTL + Streams &amp;bull; &lt;b style=&quot;color: #16A34A;&quot;&gt;~$2.00 – $5.00&lt;/b&gt;&lt;br/&gt;&lt;b style=&quot;color: #8C4FFF;&quot;&gt;🚪 API Gateway v2 (HTTP + WS):&lt;/b&gt; Pay-per-message &amp;amp; connection &amp;bull; &lt;b style=&quot;color: #16A34A;&quot;&gt;~$1.00 – $3.00&lt;/b&gt;&lt;br/&gt;&lt;b style=&quot;color: #E7157B;&quot;&gt;📈 CloudWatch Logs &amp;amp; Metrics:&lt;/b&gt; Execution logs &amp;amp; alarms &amp;bull; &lt;b style=&quot;color: #16A34A;&quot;&gt;~$1.00 – $2.00&lt;/b&gt;&lt;br/&gt;&lt;b style=&quot;color: #7AA116;&quot;&gt;📦 S3 &amp;amp; CloudFront:&lt;/b&gt; Frontend CDN + Avatar uploads &amp;bull; &lt;b style=&quot;color: #16A34A;&quot;&gt;&amp;lt; $0.50&lt;/b&gt;&lt;br/&gt;&lt;b style=&quot;color: #CC2264;&quot;&gt;🔐 Cognito &amp;amp; SSM Store:&lt;/b&gt; 50k MAUs free tier + Standard params &amp;bull; &lt;b style=&quot;color: #16A34A;&quot;&gt;$0.00 (Free)&lt;/b&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#E2E8F0;strokeWidth=1;align=left;verticalAlign=top;spacingLeft=15;spacingTop=12;" vertex="1" parent="1">
+        <mxCell id="finops_itemized" value="&lt;b style=&quot;font-size: 12px; color: #1E293B;&quot;&gt;Itemized Pay-As-You-Go Monthly Breakdown&lt;/b&gt;&lt;br/&gt;&lt;br/&gt;&lt;div style=&quot;font-size: 11px; line-height: 1.6; color: #334155;&quot;&gt;&lt;b style=&quot;color: #ED7100;&quot;&gt;⚡ AWS Lambda (3 Handlers):&lt;/b&gt; 256 MB RAM, pay-per-invocation &amp;bull; &lt;b style=&quot;color: #16A34A;&quot;&gt;~$1.00 – $3.00&lt;/b&gt;&lt;br/&gt;&lt;b style=&quot;color: #C925D1;&quot;&gt;🗄️ DynamoDB (4 Tables):&lt;/b&gt; On-Demand R/W + TTL + Streams &amp;bull; &lt;b style=&quot;color: #16A34A;&quot;&gt;~$2.00 – $5.00&lt;/b&gt;&lt;br/&gt;&lt;b style=&quot;color: #8C4FFF;&quot;&gt;🚪 API Gateway v2 (HTTP + WS):&lt;/b&gt; Pay-per-message &amp;amp; connection &amp;bull; &lt;b style=&quot;color: #16A34A;&quot;&gt;~$1.00 – $3.00&lt;/b&gt;&lt;br/&gt;&lt;b style=&quot;color: #E7157B;&quot;&gt;📈 CloudWatch Logs &amp;amp; Metrics:&lt;/b&gt; Execution logs &amp;amp; alarms &amp;bull; &lt;b style=&quot;color: #16A34A;&quot;&gt;~$1.00 – $2.00&lt;/b&gt;&lt;br/&gt;&lt;b style=&quot;color: #7AA116;&quot;&gt;📦 S3 &amp;amp; CloudFront:&lt;/b&gt; Frontend CDN + Avatar uploads &amp;bull; &lt;b style=&quot;color: #16A34A;&quot;&gt;&amp;lt; $0.50&lt;/b&gt;&lt;br/&gt;&lt;b style=&quot;color: #CC2264;&quot;&gt;🔐 Cognito &amp;amp; SSM Store:&lt;/b&gt; 50k MAUs free tier + Standard params &amp;bull; &lt;b style=&quot;color: #16A34A;&quot;&gt;$0.00 (Free)&lt;/b&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#E2E8F0;strokeWidth=1;align=left;verticalAlign=top;spacingLeft=15;spacingTop=12;" vertex="1" parent="1">
           <mxGeometry x="930" y="915" width="450" height="205" as="geometry"/>
         </mxCell>
 
@@ -239,7 +247,7 @@
         </mxCell>
 
         <!-- Browser -> Cognito -->
-        <mxCell id="edge_browser_cognito" value="OAuth 2.0 Auth Code" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#CC2264;strokeWidth=1.5;fontColor=#5A6B82;fontSize=10;" edge="1" parent="1" source="icon_browser" target="icon_cognito">
+        <mxCell id="edge_browser_cognito" value="Hosted sign-in (OAuth code) &amp;bull; own sign-up / reset forms" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#CC2264;strokeWidth=1.5;fontColor=#5A6B82;fontSize=10;" edge="1" parent="1" source="icon_browser" target="icon_cognito">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
               <mxPoint x="230" y="210"/>
@@ -290,8 +298,15 @@
           <mxGeometry relative="1" as="geometry"/>
         </mxCell>
 
-        <!-- rest-handler -> Users Table (also reads friendIds for friends list) -->
-        <!-- NOTE: No separate Friendships table. Friends are embedded in Users item. -->
+        <!-- rest-handler -> Friendships Table (friends list; accept and remove are transactions) -->
+        <mxCell id="edge_rest_friendships" value="Friends list &amp;bull; Accept / Remove (transaction)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#C925D1;strokeWidth=1.5;fontColor=#5A6B82;fontSize=10;" edge="1" parent="1" source="icon_lambda_rest" target="icon_ddb_friendships">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1010" y="300"/>
+              <mxPoint x="1010" y="587"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
 
         <!-- rest-handler -> FriendRequests Table -->
         <mxCell id="edge_rest_requests" value="Create / Update Request" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#C925D1;strokeWidth=1.5;fontColor=#5A6B82;fontSize=10;" edge="1" parent="1" source="icon_lambda_rest" target="icon_ddb_requests">
@@ -329,11 +344,11 @@
         </mxCell>
 
         <!-- fanout-handler -> Users Table (GetItem for friendIds embedded list) -->
-        <mxCell id="edge_fanout_friends" value="GetItem (friendIds embedded in Users)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7C3AED;strokeWidth=1.5;dashed=1;fontColor=#7C3AED;fontSize=10;" edge="1" parent="1" source="icon_lambda_fanout" target="icon_ddb_users">
+        <mxCell id="edge_fanout_friends" value="Query (friends of the user)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#7C3AED;strokeWidth=1.5;dashed=1;fontColor=#7C3AED;fontSize=10;" edge="1" parent="1" source="icon_lambda_fanout" target="icon_ddb_friendships">
           <mxGeometry relative="1" as="geometry">
             <Array as="points">
               <mxPoint x="940" y="640"/>
-              <mxPoint x="940" y="267"/>
+              <mxPoint x="940" y="587"/>
             </Array>
           </mxGeometry>
         </mxCell>
