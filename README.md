@@ -14,7 +14,7 @@ A serverless backend and web frontend for real-time location sharing between fri
 - Live **Map** tab — a tile-free radar plotting friends by distance and bearing
 - Nearby strangers discovery — find and connect with non-friends who opted in (ordered by proximity)
 - Friend requests — send, accept, or decline
-- User profiles with display name and discoverability toggle
+- User profiles with a required display name and a discoverability toggle
 - Profile pictures uploaded directly to S3 via pre-signed URLs
 - Configurable radius, TTL, friend limits via SSM Parameter Store
 - Automatic inactivity cleanup via DynamoDB TTL (10-minute timeout)

@@ -11,11 +11,15 @@ This is an academic project: the architecture aims to be correct and well struct
 - **Manage friends**: list them, remove them, and add new ones through friend requests (there is no direct "add friend").
 - **Discover strangers**: see nearby people who turned discoverability on, nearest first, and send them a request. Discoverability is independent of sharing location with friends.
 - **Edit a profile**: display name, discoverability and a profile picture uploaded straight to S3.
+- **Everyone has a name.** A new user chooses a display name before anything else, and nobody can use the app without one (see below).
 
 ## How it behaves
 
+### Having a name
+Nobody can use the app without a display name. After signing in, a user who has no profile is asked to choose a name before anything else is shown. Until they have one the server refuses every request except reading or creating their own profile (`403`), and the WebSocket refuses to connect (`403`). People are always shown by name, never by id and never as a placeholder, and anyone without a profile does not appear in friends, requests or nearby lists.
+
 ### Connecting
-A client opens a WebSocket with its Cognito token in the `token` query parameter. The server verifies the token, records the connection (with an expiry), and sends an `init.response` listing the friends currently within the radius. If a user has not shared a location yet, their friends are listed with distance `0`, since there is nothing to measure from. A client can send `friends.refresh` at any time to receive a fresh `init.response`.
+A client opens a WebSocket with its Cognito token in the `token` query parameter. The server verifies the token, checks that the user has a profile, records the connection (with an expiry), and sends an `init.response` listing the friends currently within the radius. If a user has not shared a location yet, their friends are listed with distance `0`, since there is nothing to measure from. A client can send `friends.refresh` at any time to receive a fresh `init.response`.
 
 ### Sharing a location
 `location.update` messages are validated (latitude −90 to 90, longitude −180 to 180, a timestamp string). A valid update stores the location, refreshes the connection's expiry, and notifies friends; an invalid one gets an `error` message back and changes nothing. Updates for an unknown connection are ignored.
@@ -24,7 +28,7 @@ A client opens a WebSocket with its Cognito token in the `token` query parameter
 Each stored location change triggers a fan-out: for every friend with a live connection, if the friend is within the radius (or has not shared a location yet) they receive a `location.push`. Friends who are out of range receive nothing, and connections that have closed are skipped. If looking up friends fails for one update, only that update is retried.
 
 ### Friends and requests
-- Sending a request to someone creates a pending request. You cannot send one to yourself, to an existing friend, or twice to the same person.
+- Sending a request to someone creates a pending request. You cannot send one to yourself, to an existing friend, or twice to the same person, and the person must have a profile (otherwise `404`).
 - The recipient lists pending requests (each with the sender's name) and accepts or declines.
 - **Accepting** makes both users friends and consumes the request in a single step, so it can never leave a one-sided friendship. If the request was already accepted or declined it answers `409`, and it is refused when either user has reached the friend limit.
 - **Removing** a friend removes the friendship for both users in one step. Removing someone who is not a friend succeeds quietly.
@@ -33,7 +37,7 @@ Each stored location change triggers a fan-out: for every friend with a live con
 The server finds connections near the caller, excludes the caller and their friends, keeps only users who are discoverable, and returns each person once at the distance of their nearest device, closest first, up to the configured limit. Strangers only ever see a distance, never coordinates. The caller needs a recent location, otherwise the answer is `400`.
 
 ### Profiles and pictures
-Reading a profile returns only public fields. A user can edit only their own profile; changes are validated (see below). To set a picture, the client asks for an upload URL, uploads the file straight to S3, then saves the returned key on the profile. Pictures are served through short-lived signed URLs.
+Reading a profile returns only public fields. A user can edit only their own profile, and creating one requires a display name; changes are validated (see below). To set a picture, the client asks for an upload URL, uploads the file straight to S3, then saves the returned key on the profile. Pictures are served through short-lived signed URLs.
 
 ## Rules and limits
 
@@ -44,7 +48,7 @@ Reading a profile returns only public fields. A user can edit only their own pro
 | Location update interval for clients | 30 seconds (`/nearby-friends/location-update-interval-seconds`) |
 | Friends per user | 5,000 (`/nearby-friends/max-friends`) |
 | Nearby strangers returned | 50 (`/nearby-friends/nearby-strangers-limit`) |
-| Display name | 1–50 characters after trimming, no control characters |
+| Display name | required; 1–50 characters after trimming, no control characters |
 | `discoverable` | exactly `true` or `false` |
 | Profile picture key | must be an upload key for your own profile (`profile-pictures/<your id>/…`) |
 | Picture upload | URL valid 5 minutes; the upload must be sent as `Content-Type: image/jpeg` |
@@ -56,6 +60,8 @@ Settings are read from SSM and refreshed about every 5 minutes. A missing or inv
 
 All REST calls need a Cognito token. The API Gateway authorizer checks it and the handler uses its `sub` as the caller's id. Errors are JSON `{ "error": "<message>" }`.
 
+Every route except reading or creating your own profile also needs the caller to have a profile; without one it answers `403` with "Set a display name first".
+
 ### REST
 
 | Method and path | Success | Errors |
@@ -64,19 +70,19 @@ All REST calls need a Cognito token. The API Gateway authorizer checks it and th
 | `DELETE /friends/{friendId}` | `200` `{ message }` | |
 | `GET /nearby-friends` | `200` `[{ friendId, displayName, profilePictureUrl?, latitude, longitude, lastUpdated, distanceMiles }]`, nearest first | `400` no recent location |
 | `GET /nearby-strangers` | `200` `[{ userId, displayName, profilePictureUrl, distanceMiles }]`, nearest first | `400` no recent location |
-| `POST /friend-requests/{toUserId}` | `201` the request `{ requestId, fromUserId, toUserId, status, createdAt }` | `400` to yourself; `409` already friends or already pending |
+| `POST /friend-requests/{toUserId}` | `201` the request `{ requestId, fromUserId, toUserId, status, createdAt }` | `400` to yourself; `404` the person has no profile; `409` already friends or already pending |
 | `GET /friend-requests` | `200` pending incoming requests, each with `fromDisplayName` | |
 | `PUT /friend-requests/{requestId}/accept` | `200` `{ message }` | `403` not the recipient; `404` unknown; `409` not pending, friend limit reached |
 | `PUT /friend-requests/{requestId}/decline` | `200` `{ message }` | `403`; `404`; `409` not pending |
 | `GET /users/{userId}/profile` | `200` `{ userId, displayName, profilePictureUrl?, discoverable, createdAt }` | `404` |
-| `PUT /users/{userId}/profile` | `200` `{ message }` (created or updated) | `400` invalid JSON or field; `403` not your profile |
+| `PUT /users/{userId}/profile` | `200` `{ message }` (created or updated) | `400` invalid JSON or field, or no `displayName` when creating; `403` not your profile |
 | `GET /users/{userId}/profile-picture-upload-url` | `200` `{ uploadUrl, s3Key }` | `403` not your profile |
 
 Every route also answers `401` without a valid token, `404` for an unknown route, and `500` `{ "error": "Internal server error" }` for an unexpected failure.
 
 ### WebSocket
 
-Connect to the WebSocket API with `?token=<Cognito token>`; an invalid token is refused with `401`.
+Connect to the WebSocket API with `?token=<Cognito token>`; an invalid token is refused with `401`, and a user without a profile with `403`.
 
 | Message | Direction | Payload |
 |---|---|---|
