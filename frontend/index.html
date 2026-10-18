@@ -377,11 +377,14 @@
       line-height: 1.55;
       margin-bottom: 24px;
     }
-    .auth-card input[type="text"] {
+    .auth-card input[type="text"],
+    .auth-card input[type="email"],
+    .auth-card input[type="password"] {
       width: 100%;
       box-sizing: border-box;
       margin: 6px 0 14px;
     }
+    .auth-card button.wide,
     .auth-card #btn-login,
     .auth-card #btn-save-first-name {
       width: 100%;
@@ -389,6 +392,25 @@
       font-size: 13.5px;
       font-weight: 500;
     }
+    .auth-card button.wide + button.wide { margin-top: 10px; }
+    .auth-card #btn-login + button.wide { margin-top: 10px; }
+    .auth-card .auth-links {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .auth-card .link-button {
+      background: none;
+      border: none;
+      padding: 0;
+      width: auto;
+      color: var(--ink-3);
+      font-size: 12.5px;
+      text-decoration: underline;
+      cursor: pointer;
+    }
+    .auth-card .hint { font-size: 12px; color: var(--ink-3); margin: -6px 0 14px; line-height: 1.5; }
     .auth-footnote {
       margin-top: 20px;
       padding-top: 18px;
@@ -663,7 +685,75 @@
     <h1>Find your people.</h1>
     <p class="auth-tagline">Real-time location with the people you trust. Sign in to see where your friends are.</p>
     <button id="btn-login">Continue with Cognito</button>
+    <button id="btn-show-signup" class="secondary wide">Create account</button>
+    <p class="status" id="signin-status"></p>
+    <div class="auth-links"><button id="btn-show-forgot" class="link-button">Forgot password?</button></div>
     <p class="auth-footnote">Location data is only shared with friends you've approved.</p>
+  </div>
+
+  <!-- ── CREATE ACCOUNT ─────────────────────────────────────────── -->
+  <div id="section-signup" class="card auth-card hidden">
+    <div class="auth-brand">FriendsFinders</div>
+    <h1>Create your account</h1>
+    <label for="signup-name">Display name</label>
+    <input id="signup-name" type="text" maxlength="50" placeholder="Your name" autocomplete="nickname" />
+    <label for="signup-email">Email</label>
+    <input id="signup-email" type="email" placeholder="you@example.com" autocomplete="email" />
+    <label for="signup-password">Password</label>
+    <input id="signup-password" type="password" autocomplete="new-password" />
+    <p class="hint">At least 8 characters, with a capital letter, a lowercase letter and a number.</p>
+    <label for="signup-confirm">Confirm password</label>
+    <input id="signup-confirm" type="password" autocomplete="new-password" />
+    <button id="btn-signup" class="wide">Create account</button>
+    <p class="status" id="signup-status"></p>
+    <div class="auth-links"><button id="btn-signup-back" class="link-button">Back to sign in</button></div>
+  </div>
+
+  <!-- ── ENTER THE EMAILED CODE ─────────────────────────────────── -->
+  <div id="section-confirm" class="card auth-card hidden">
+    <div class="auth-brand">FriendsFinders</div>
+    <h1>Check your email</h1>
+    <p class="auth-tagline">We sent a code to <strong id="confirm-email"></strong>. Enter it to finish creating your account.</p>
+    <label for="confirm-code">Code</label>
+    <input id="confirm-code" type="text" inputmode="numeric" autocomplete="one-time-code" />
+    <button id="btn-confirm" class="wide">Confirm</button>
+    <p class="status" id="confirm-status"></p>
+    <div class="auth-links">
+      <button id="btn-resend-confirm" class="link-button">Send a new code</button>
+      <button id="btn-confirm-back" class="link-button">Back to sign in</button>
+    </div>
+  </div>
+
+  <!-- ── FORGOT PASSWORD ────────────────────────────────────────── -->
+  <div id="section-forgot" class="card auth-card hidden">
+    <div class="auth-brand">FriendsFinders</div>
+    <h1>Reset your password</h1>
+    <p class="auth-tagline">Enter your email and we will send you a code.</p>
+    <label for="forgot-email">Email</label>
+    <input id="forgot-email" type="email" placeholder="you@example.com" autocomplete="email" />
+    <button id="btn-forgot" class="wide">Send code</button>
+    <p class="status" id="forgot-status"></p>
+    <div class="auth-links"><button id="btn-forgot-back" class="link-button">Back to sign in</button></div>
+  </div>
+
+  <!-- ── CHOOSE A NEW PASSWORD ──────────────────────────────────── -->
+  <div id="section-reset" class="card auth-card hidden">
+    <div class="auth-brand">FriendsFinders</div>
+    <h1>Choose a new password</h1>
+    <p class="auth-tagline">We sent a code to <strong id="reset-email"></strong>.</p>
+    <label for="reset-code">Code</label>
+    <input id="reset-code" type="text" inputmode="numeric" autocomplete="one-time-code" />
+    <label for="reset-password">New password</label>
+    <input id="reset-password" type="password" autocomplete="new-password" />
+    <p class="hint">At least 8 characters, with a capital letter, a lowercase letter and a number.</p>
+    <label for="reset-confirm">Confirm new password</label>
+    <input id="reset-confirm" type="password" autocomplete="new-password" />
+    <button id="btn-reset" class="wide">Change password</button>
+    <p class="status" id="reset-status"></p>
+    <div class="auth-links">
+      <button id="btn-resend-reset" class="link-button">Send a new code</button>
+      <button id="btn-reset-back" class="link-button">Back to sign in</button>
+    </div>
   </div>
 
   <!-- ── CHOOSE A NAME (signed in, but no profile yet) ───────────── -->
@@ -846,6 +936,7 @@ const COGNITO_DOMAIN   = CONFIG.cognitoDomain;
 const WEB_CLIENT_ID    = CONFIG.webClientId;
 const HTTP_API         = CONFIG.httpApi;
 const WS_API           = CONFIG.wsApi;
+const COGNITO_API      = `https://cognito-idp.${CONFIG.region}.amazonaws.com/`;
 const REDIRECT_URI     = window.location.origin + '/';
 
 // ── Auth helpers ──────────────────────────────────────────────────────────────
@@ -876,6 +967,84 @@ async function exchangeCode(code) {
   if (!res.ok) throw new Error('Token exchange failed');
   return res.json();
 }
+
+// ── Cognito account actions (create account, codes, password sign-in) ────────
+// The browser talks to Cognito's own API over HTTPS. The password goes to Cognito and nowhere else:
+// it is kept only in memory while the user finishes the steps and is never stored.
+const COGNITO_ERRORS = {
+  UsernameExistsException: 'An account with this email already exists. Sign in instead.',
+  CodeMismatchException: 'That code is not right. Check it and try again.',
+  ExpiredCodeException: 'That code has expired. Send a new one.',
+  UserNotFoundException: 'There is no account with that email.',
+  NotAuthorizedException: 'The email or password is not right.',
+  LimitExceededException: 'Too many attempts. Wait a moment and try again.',
+  TooManyRequestsException: 'Too many attempts. Wait a moment and try again.',
+  TooManyFailedAttemptsException: 'Too many attempts. Wait a moment and try again.',
+};
+
+async function cognito(action, body) {
+  let res;
+  try {
+    res = await fetch(COGNITO_API, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-amz-json-1.1',
+        'X-Amz-Target': `AWSCognitoIdentityProviderService.${action}`,
+      },
+      body: JSON.stringify({ ClientId: WEB_CLIENT_ID, ...body }),
+    });
+  } catch {
+    throw new Error('Could not reach the sign-in service. Check your connection and try again.');
+  }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const type = String(data.__type || '').split('#').pop();
+    const own = type === 'InvalidPasswordException' || type === 'InvalidParameterException';
+    throw new Error((!own && COGNITO_ERRORS[type]) || data.message || 'Something went wrong. Try again.');
+  }
+  return data;
+}
+
+const PASSWORD_RULE = 'Your password needs at least 8 characters, with a capital letter, a lowercase letter and a number.';
+function passwordProblem(password, confirm) {
+  if (password.length < 8 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/[0-9]/.test(password)) return PASSWORD_RULE;
+  if (password !== confirm) return 'The passwords do not match.';
+  return null;
+}
+
+const AUTH_CARDS = ['section-auth', 'section-signup', 'section-confirm', 'section-forgot', 'section-reset'];
+function showAuthCard(id) {
+  hide(...AUTH_CARDS);
+  show(id);
+}
+
+// Signs in with email and password, keeps the tokens like the hosted page does, and opens the app.
+async function signInWithPassword(email, password) {
+  const data = await cognito('InitiateAuth', {
+    AuthFlow: 'USER_PASSWORD_AUTH',
+    AuthParameters: { USERNAME: email, PASSWORD: password },
+  });
+  const result = data.AuthenticationResult;
+  if (!result) throw new Error('Could not sign you in. Please try again.');
+  saveTokens({ id_token: result.IdToken, access_token: result.AccessToken, refresh_token: result.RefreshToken });
+  await init();
+}
+
+// Runs a button's action: disables it meanwhile and shows any error in the card's status line.
+async function runStep(button, statusId, action) {
+  button.disabled = true;
+  setStatus(statusId, '', null);
+  try {
+    await action();
+  } catch (e) {
+    setStatus(statusId, e.message, false);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+// What the user typed in the steps that are still open; never written to storage.
+let pending = { email: '', password: '' };
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 async function api(method, path, body) {
@@ -1368,7 +1537,8 @@ async function init() {
   const tokens = getTokens();
   if (tokens) {
     const claims = parseJwt(tokens.id_token);
-    hide('section-auth');
+    hide(...AUTH_CARDS);
+    pending = { email: '', password: '' };
 
     // Nobody can use the app without a name: the server refuses everything until a profile exists,
     // so a signed-in user without one is asked for a name before anything else is shown.
@@ -1408,6 +1578,100 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 });
 
 // ── Event listeners ───────────────────────────────────────────────────────────
+// ── Create account, confirm with the emailed code, reset a forgotten password ──
+const field = (id) => document.getElementById(id).value.trim();
+const rawField = (id) => document.getElementById(id).value;
+const button = (id) => document.getElementById(id);
+
+function onEnter(inputId, buttonId) {
+  document.getElementById(inputId).onkeydown = (ev) => { if (ev.key === 'Enter') button(buttonId).click(); };
+}
+
+// After a code is accepted: sign in with the password just typed; if that is refused, ask to sign in by hand.
+async function finishAndSignIn(email, password, message) {
+  try {
+    await signInWithPassword(email, password);
+  } catch {
+    pending = { email: '', password: '' };
+    showAuthCard('section-auth');
+    setStatus('signin-status', message, true);
+  }
+}
+
+button('btn-show-signup').onclick = () => showAuthCard('section-signup');
+button('btn-show-forgot').onclick = () => showAuthCard('section-forgot');
+for (const id of ['btn-signup-back', 'btn-confirm-back', 'btn-forgot-back', 'btn-reset-back']) {
+  button(id).onclick = () => showAuthCard('section-auth');
+}
+
+button('btn-signup').onclick = () => runStep(button('btn-signup'), 'signup-status', async () => {
+  const name = field('signup-name');
+  const email = field('signup-email');
+  const password = rawField('signup-password');
+  if (!name) throw new Error('Please enter a name.');
+  if (name.length > 50) throw new Error('Your name can have at most 50 characters.');
+  if (/[\u0000-\u001f\u007f]/.test(name)) throw new Error('Your name has characters that are not allowed.');
+  if (!email) throw new Error('Please enter your email.');
+  const problem = passwordProblem(password, rawField('signup-confirm'));
+  if (problem) throw new Error(problem);
+
+  const data = await cognito('SignUp', {
+    Username: email,
+    Password: password,
+    UserAttributes: [{ Name: 'email', Value: email }, { Name: 'name', Value: name }],
+  });
+  pending = { email, password };
+  if (data.UserConfirmed) {
+    await finishAndSignIn(email, password, 'Your account is ready. Please sign in.');
+    return;
+  }
+  document.getElementById('confirm-email').textContent = email;
+  setStatus('confirm-status', '', null);
+  showAuthCard('section-confirm');
+});
+
+button('btn-confirm').onclick = () => runStep(button('btn-confirm'), 'confirm-status', async () => {
+  const code = field('confirm-code');
+  if (!code) throw new Error('Please enter the code from your email.');
+  await cognito('ConfirmSignUp', { Username: pending.email, ConfirmationCode: code });
+  await finishAndSignIn(pending.email, pending.password, 'Your account is confirmed. Please sign in.');
+});
+
+button('btn-resend-confirm').onclick = () => runStep(button('btn-resend-confirm'), 'confirm-status', async () => {
+  await cognito('ResendConfirmationCode', { Username: pending.email });
+  setStatus('confirm-status', `A new code was sent to ${pending.email}.`, true);
+});
+
+button('btn-forgot').onclick = () => runStep(button('btn-forgot'), 'forgot-status', async () => {
+  const email = field('forgot-email');
+  if (!email) throw new Error('Please enter your email.');
+  await cognito('ForgotPassword', { Username: email });
+  pending = { email, password: '' };
+  document.getElementById('reset-email').textContent = email;
+  setStatus('reset-status', '', null);
+  showAuthCard('section-reset');
+});
+
+button('btn-reset').onclick = () => runStep(button('btn-reset'), 'reset-status', async () => {
+  const code = field('reset-code');
+  const password = rawField('reset-password');
+  if (!code) throw new Error('Please enter the code from your email.');
+  const problem = passwordProblem(password, rawField('reset-confirm'));
+  if (problem) throw new Error(problem);
+  await cognito('ConfirmForgotPassword', { Username: pending.email, ConfirmationCode: code, Password: password });
+  await finishAndSignIn(pending.email, password, 'Your password was changed. Please sign in.');
+});
+
+button('btn-resend-reset').onclick = () => runStep(button('btn-resend-reset'), 'reset-status', async () => {
+  await cognito('ForgotPassword', { Username: pending.email });
+  setStatus('reset-status', `A new code was sent to ${pending.email}.`, true);
+});
+
+onEnter('signup-confirm', 'btn-signup');
+onEnter('confirm-code', 'btn-confirm');
+onEnter('forgot-email', 'btn-forgot');
+onEnter('reset-confirm', 'btn-reset');
+
 document.getElementById('btn-login').onclick = () => {
   const url = `${COGNITO_DOMAIN}/oauth2/authorize?` + new URLSearchParams({
     response_type: 'code',

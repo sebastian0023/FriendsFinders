@@ -22,6 +22,18 @@ export interface Call {
   body?: any;
 }
 
+/** What the fake Cognito answers for an action such as "SignUp": a fixed response or one worked out from the request. */
+export type CognitoRoute = ApiResponse | ((request: { body: any }) => ApiResponse);
+/** Cognito routes are keyed by action name. An action without a route answers 400 InvalidParameterException. */
+export type CognitoRoutes = Record<string, CognitoRoute>;
+
+export interface CognitoCall {
+  action: string;
+  body: any;
+}
+
+export const COGNITO_URL = 'https://cognito-idp.us-east-1.amazonaws.com/';
+
 export interface Page {
   window: any;
   document: Document;
@@ -30,6 +42,8 @@ export interface Page {
   visible: (id: string) => boolean;
   /** Every request the page sent to the API, in order. */
   calls: Call[];
+  /** Every request the page sent to Cognito (sign-up, codes, password sign-in), in order. */
+  cognitoCalls: CognitoCall[];
   /** Everything the page showed with alert(). */
   alerts: string[];
   /** Runs code in the page's own global scope, so tests can reach its top-level variables. */
@@ -38,6 +52,7 @@ export interface Page {
 
 export interface PageOptions {
   routes?: Routes;
+  cognito?: CognitoRoutes;
   /** The signed-in user's token claims; null opens the page signed out. */
   claims?: Record<string, unknown> | null;
 }
@@ -55,9 +70,10 @@ export function closeAllPages(): void {
   while (opened.length) opened.pop()!.window.close();
 }
 
-export function openPage({ routes = {}, claims = { sub: 'user-1', email: 'a@example.com' } }: PageOptions = {}): Page {
+export function openPage({ routes = {}, cognito = {}, claims = { sub: 'user-1', email: 'a@example.com' } }: PageOptions = {}): Page {
   const calls: Call[] = [];
   const alerts: string[] = [];
+  const cognitoCalls: CognitoCall[] = [];
 
   const dom = new JSDOM(FRONTEND_HTML, {
     url: 'https://app.example/',
@@ -71,11 +87,29 @@ export function openPage({ routes = {}, claims = { sub: 'user-1', email: 'a@exam
         webClientId: 'client',
         httpApi: 'https://api.example',
         wsApi: 'wss://ws.example',
+        region: 'us-east-1',
       };
       if (claims) w.sessionStorage.setItem('tokens', JSON.stringify({ id_token: idToken(claims), access_token: 'x' }));
       w.alert = (message: string) => alerts.push(message);
       w.scrollTo = () => undefined;
-      w.fetch = async (url: string, init: { method?: string; body?: string } = {}) => {
+      const respond = (reply: ApiResponse) => ({
+        ok: reply.status < 400,
+        status: reply.status,
+        text: async () => JSON.stringify(reply.json ?? {}),
+        json: async () => reply.json ?? {},
+      });
+      w.fetch = async (url: string, init: { method?: string; body?: string; headers?: Record<string, string> } = {}) => {
+        if (String(url) === COGNITO_URL) {
+          const action = String(init.headers?.['X-Amz-Target'] ?? '').replace('AWSCognitoIdentityProviderService.', '');
+          const body = init.body ? JSON.parse(init.body) : undefined;
+          cognitoCalls.push({ action, body });
+          const route = cognito[action];
+          return respond(
+            typeof route === 'function'
+              ? route({ body })
+              : route || { status: 400, json: { __type: 'InvalidParameterException', message: `No fake for ${action}` } },
+          );
+        }
         const path = String(url).replace('https://api.example', '');
         const method = init.method || 'GET';
         const body = init.body ? JSON.parse(init.body) : undefined;
@@ -84,12 +118,7 @@ export function openPage({ routes = {}, claims = { sub: 'user-1', email: 'a@exam
         const route = routes[`${method} ${path}`];
         const reply: ApiResponse =
           typeof route === 'function' ? route({ body }) : route || { status: 404, json: { error: 'Not found' } };
-        return {
-          ok: reply.status < 400,
-          status: reply.status,
-          text: async () => JSON.stringify(reply.json ?? {}),
-          json: async () => reply.json ?? {},
-        };
+        return respond(reply);
       };
     },
   });
@@ -103,6 +132,7 @@ export function openPage({ routes = {}, claims = { sub: 'user-1', email: 'a@exam
     $,
     visible: (id) => !!$(id) && !$(id).classList.contains('hidden'),
     calls,
+    cognitoCalls,
     alerts,
     run: (code) => (dom.window as any).eval(code),
   };

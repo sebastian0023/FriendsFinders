@@ -4,6 +4,7 @@ locals {
     webClientId   = var.cognito_web_client_id
     httpApi       = var.http_api_endpoint
     wsApi         = var.websocket_api_endpoint
+    region        = var.aws_region
   })};</script>"
 
   index_html = replace(

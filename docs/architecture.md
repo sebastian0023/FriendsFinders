@@ -74,6 +74,7 @@ The TypeScript shapes are in `src/types/index.ts`; this document deliberately do
 
 ## Security
 
+- **Passwords:** the create-account and reset forms send the password straight from the browser to Cognito over HTTPS. It is kept in memory only until the steps are done, never stored, and never sent to our API.
 - **Authentication:** Cognito issues the tokens. The HTTP API's JWT authorizer checks them and passes the verified claims to the handler. The WebSocket handler checks them itself, as above.
 - **Authorisation:** users can only edit their own profile and upload URL (`403` otherwise); only the recipient can accept or decline a request.
 - **Everyone has a name:** the server refuses every request (and the WebSocket) from a user with no profile, apart from reading or creating their own profile, and creating one requires a display name. The web app asks for the name right after sign-in.
@@ -108,3 +109,4 @@ Each entry says what was chosen, why, and what it replaced.
 - **A tile-free radar map.** The web app draws friends by distance and bearing on a canvas, so there is no map or tile service to run or pay for.
 - **Terraform only, with per-account state.** The state bucket's name differs per AWS account, so it is passed at `init` time and kept out of the code (`terraform/backend.hcl.example`). Provider versions are pinned by the committed lock file.
 - **Tests as the specification.** Behaviour is pinned by tests that never call AWS, and there are no separate requirement or task documents. See "How We Work" in `AGENTS.md`.
+- **Our own account forms, calling Cognito directly.** Cognito's hosted page cannot ask for a name or a second password field, so the web app has its own create-account, confirm-code and reset-password forms that call Cognito's API from the browser (`USER_PASSWORD_AUTH` on the web client, no SDK, no extra Lambda). The name is saved as the account's `name` attribute so the profile can be started with it. Replaced sending people to the hosted page to sign up; a route through our own Lambda was rejected because it adds a public endpoint and code for no gain.

@@ -33,7 +33,10 @@ resource "aws_cognito_user_pool_client" "web" {
   name         = "${var.project_name}-web-client"
   user_pool_id = aws_cognito_user_pool.main.id
 
+  # USER_PASSWORD_AUTH lets the page's own create-account form sign the user in right after they
+  # confirm. The password goes to Cognito over HTTPS and is not stored.
   explicit_auth_flows = [
+    "ALLOW_USER_PASSWORD_AUTH",
     "ALLOW_USER_SRP_AUTH",
     "ALLOW_REFRESH_TOKEN_AUTH",
   ]
