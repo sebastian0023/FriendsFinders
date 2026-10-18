@@ -46,6 +46,7 @@ Nearby Friends is an academic-purpose serverless real-time location sharing back
   - Unit tests: `jest` with `ts-jest`.
   - Property-based tests: `fast-check` (minimum 100 iterations per property test).
   - AWS mocking: `aws-sdk-client-mock` for the wrappers in `src/utils`; handler tests replace those wrappers with `jest.mock()`.
+  - Web app: `jsdom` opens the real `frontend/index.html` against a fake API (`tests/frontend`, helper `tests/helpers/page.ts`). Keep `jsdom` on the 26 series (newer versions are ES-module only and Jest cannot load them).
 - **Runtime Parameters (AWS SSM)**:
   - Search radius: `/nearby-friends/search-radius-miles` (default: 5)
   - Inactivity TTL: `/nearby-friends/inactivity-ttl-seconds` (default: 600)
@@ -68,6 +69,7 @@ npm run build        # node scripts/build.js -> dist/*.zip
 npm test             # Run Jest
 npm run test:unit    # Unit tests
 npm run test:property # Property tests (fast-check)
+npm run test:frontend # Web app tests (jsdom)
 
 # Terraform (copy terraform/backend.hcl.example to backend.hcl and set your state bucket first)
 cd terraform && terraform init -backend-config=backend.hcl

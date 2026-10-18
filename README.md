@@ -102,7 +102,7 @@ The Connections table embeds location data (latitude, longitude, timestamp) alon
 - AWS SDK v3 modular (`@aws-sdk/client-dynamodb`, `@aws-sdk/lib-dynamodb`, `@aws-sdk/client-apigatewaymanagementapi`, `@aws-sdk/client-s3`, `@aws-sdk/s3-request-presigner`, `@aws-sdk/client-ssm`)
 - `jsonwebtoken` + `jwks-rsa` (WebSocket JWT verification)
 - `esbuild` for Lambda bundling
-- Jest + ts-jest, `fast-check` (property tests) and `aws-sdk-client-mock` for testing
+- Jest + ts-jest, `fast-check` (property tests), `aws-sdk-client-mock` and `jsdom` (web app tests) for testing
 
 **Frontend**
 
@@ -155,6 +155,7 @@ The Connections table embeds location data (latitude, longitude, timestamp) alon
 ├── tests/
 │   ├── unit/                       # Handler and wrapper tests (AWS is always mocked)
 │   ├── property/                   # fast-check property tests
+│   ├── frontend/                   # The web app in a simulated browser (jsdom)
 │   └── helpers/                    # Shared test builders
 ├── scripts/
 │   ├── build.js                    # esbuild bundler → dist/<handler>.zip
@@ -212,6 +213,7 @@ The Terraform `frontend-deploy` module uploads `frontend/index.html` to S3 and i
 npm test                 # everything
 npm run test:unit        # handlers and wrappers
 npm run test:property    # fast-check property tests
+npm run test:frontend    # the web app, in a simulated browser
 npx jest --coverage      # with a coverage report
 npm run type-check       # types, including the tests
 ```
@@ -220,6 +222,7 @@ AWS is never called from a test:
 
 - **Handlers** are tested with their wrappers (`dynamo-client`, `apigw-client`, `config`, `s3-client`) replaced by `jest.mock()`.
 - **Wrappers** are tested with `aws-sdk-client-mock`, asserting the exact requests they send. The S3 tests run the real presigner offline with fake credentials, and the WebSocket tests sign real JWTs with a throwaway key.
+- **The web app** (`frontend/index.html`) is tested by opening the real page in a simulated browser (`jsdom`) against a fake API. The tests check what a user would see: the name step after sign-in, names (never ids) in the friends list, on the map and in requests, and error messages.
 - **Property tests** (100+ runs each) cover the pure logic: Haversine, validation, message round-trips, the geo grid and profile validation. The grid has a test that every point inside the radius falls in a square that gets queried.
 
 The tests are the executable description of how the system behaves: when a route or a rule changes, change its test with it.
